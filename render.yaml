@@ -2,7 +2,7 @@
 # 用法：把仓库连到 Render，它会自动读取本文件
 services:
   - type: web
-    name: xianxing-zhiche
+    name: xianxing-zhice
     runtime: python
     plan: free
     region: singapore

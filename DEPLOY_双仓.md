@@ -39,7 +39,7 @@ git config --global user.email "你的邮箱"
 1. 打开 <https://gitee.com>，登录（没号就注册，需要手机号）。
 2. 右上角 **+** → **新建仓库**。
 3. 填写：
-   - **仓库名称**：`xianxing-zhiche`（随意，建议英文）
+   - **仓库名称**：`xianxing-zhice`（随意，建议英文）
    - **仓库路径**：自动生成，记住它，后面要用
    - **是否开源**：选 **公开**（如果以后要用 CloudBase 部署，必须公开）
    - **初始化仓库**：**三个勾都别勾**（不要 README、不要 .gitignore、不要开源许可证）
@@ -48,7 +48,7 @@ git config --global user.email "你的邮箱"
 创建后页面会给出地址，形如：
 
 ```
-https://gitee.com/你的用户名/xianxing-zhiche.git
+https://gitee.com/你的用户名/xianxing-zhice.git
 ```
 
 > 为什么不能勾初始化？因为勾了会生成一个初始提交，和你本地的提交"分叉"，
@@ -59,7 +59,7 @@ https://gitee.com/你的用户名/xianxing-zhiche.git
 ## 2. 在 GitHub 建空仓库
 
 1. 打开 <https://github.com/new>。
-2. **Repository name** 填 `xianxing-zhiche`（可以和 Gitee 不同名，但建议一致）。
+2. **Repository name** 填 `xianxing-zhice`（可以和 Gitee 不同名，但建议一致）。
 3. 选 **Public**（私有也行，但 Render 拉私有仓库要额外授权 GitHub App）。
 4. **Add a README / .gitignore / license 全都不勾**。
 5. 点 **Create repository**。
@@ -67,7 +67,7 @@ https://gitee.com/你的用户名/xianxing-zhiche.git
 拿到地址：
 
 ```
-https://github.com/你的用户名/xianxing-zhiche.git
+https://github.com/你的用户名/xianxing-zhice.git
 ```
 
 ---
@@ -78,13 +78,13 @@ https://github.com/你的用户名/xianxing-zhiche.git
 
 ```powershell
 # ① 设主地址（fetch 用 Gitee）
-git remote add origin https://gitee.com/你的用户名/xianxing-zhiche.git
+git remote add origin https://gitee.com/你的用户名/xianxing-zhice.git
 
 # ② 添加第一个推送地址（Gitee）
-git remote set-url --add --push origin https://gitee.com/你的用户名/xianxing-zhiche.git
+git remote set-url --add --push origin https://gitee.com/你的用户名/xianxing-zhice.git
 
 # ③ 添加第二个推送地址（GitHub）
-git remote set-url --add --push origin https://github.com/你的用户名/xianxing-zhiche.git
+git remote set-url --add --push origin https://github.com/你的用户名/xianxing-zhice.git
 
 # ④ 检查
 git remote -v
@@ -93,9 +93,9 @@ git remote -v
 期望输出：
 
 ```
-origin  https://gitee.com/你的用户名/xianxing-zhiche.git (fetch)
-origin  https://gitee.com/你的用户名/xianxing-zhiche.git (push)
-origin  https://github.com/你的用户名/xianxing-zhiche.git (push)
+origin  https://gitee.com/你的用户名/xianxing-zhice.git (fetch)
+origin  https://gitee.com/你的用户名/xianxing-zhice.git (push)
+origin  https://github.com/你的用户名/xianxing-zhice.git (push)
 ```
 
 **关键是两行 push**：git 会按顺序往两个地址各推一次。
@@ -128,9 +128,9 @@ git push -u origin main
 ### 推送成功的标志
 
 ```
-To https://gitee.com/你的用户名/xianxing-zhiche.git
+To https://gitee.com/你的用户名/xianxing-zhice.git
  * [new branch]      main -> main
-To https://github.com/你的用户名/xianxing-zhiche.git
+To https://github.com/你的用户名/xianxing-zhice.git
  * [new branch]      main -> main
 branch 'main' set up to track 'origin/main'.
 ```
@@ -173,13 +173,13 @@ git push                   # 一条命令，两个仓库同时更新
 只推 Gitee（比如 GitHub 暂时连不上）：
 
 ```powershell
-git push https://gitee.com/你的用户名/xianxing-zhiche.git main
+git push https://gitee.com/你的用户名/xianxing-zhice.git main
 ```
 
 只推 GitHub（部署前补一刀）：
 
 ```powershell
-git push https://github.com/你的用户名/xianxing-zhiche.git main
+git push https://github.com/你的用户名/xianxing-zhice.git main
 ```
 
 ---
