@@ -153,9 +153,36 @@ git remote -v
 
 | 现象 | 处理 |
 |---|---|
-| `Failed to connect to github.com port 443` | 重试；或改用 SSH：`git remote set-url --add --push origin git@github.com:用户名/仓库.git` |
+| `Failed to connect to github.com port 443` | 先看是不是没走代理，见下面「代理」一节；再重试；或改用 SSH：`git remote set-url --add --push origin git@github.com:用户名/仓库.git` |
 | 一直卡在 `Writing objects` | 项目小（<10MB），多半是网络抖动，`Ctrl+C` 后重试 |
 | 部分推送失败 | `git push origin main` 会两处都推；只想推一个用 `git push https://gitee.com/... main` |
+
+### 有本地代理但 git 连不上 GitHub
+
+典型症状：**浏览器能打开 github.com，`git push` 却报 443 超时**。
+原因：浏览器走系统代理，git 默认直连。
+
+先确认代理端口（Clash/V2Ray 常见 `7897`、`7890`、`1080`），给 git 单独配 GitHub 的代理：
+
+```powershell
+git config --global http.https://github.com.proxy http://127.0.0.1:7897
+git ls-remote https://github.com/用户名/仓库.git    # 能列出内容就说明通了
+```
+
+> 只对 github.com 生效，Gitee 仍是直连，速度不受影响。
+
+关掉代理后如果 GitHub 报错，把这条配置删掉即可：
+
+```powershell
+git config --global --unset http.https://github.com.proxy
+```
+
+想看当前配置：
+
+```powershell
+git config --global --get http.https://github.com.proxy
+```
+
 
 ---
 
