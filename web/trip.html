@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>结伴规划 · 闲行智策</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="back" href="#" id="back">← 回行程</a>
+    <div style="flex:1"></div>
+    <div class="sub">多人偏好融合</div>
+  </header>
+
+  <section class="card">
+    <h2>每个人想玩什么</h2>
+    <p class="muted" style="margin-top:-4px">分开填，系统合并后给出共同点和冲突点。</p>
+    <div id="members"></div>
+    <button class="btn ghost" id="btn-add" style="margin-top:10px">+ 添加一个人</button>
+    <button class="btn" id="btn-merge" style="margin-top:10px">计算折中方案</button>
+  </section>
+
+  <div id="result"></div>
+</div>
+<div class="toast" id="toast"></div>
+<script src="/js/api.js"></script>
+<script src="/js/trip.js"></script>
+</body>
+</html>

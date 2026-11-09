@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>闲行智策 · 一句话规划短途旅行</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>闲行智策</h1>
+      <div class="sub">说一句话，生成一份能改的行程</div>
+    </div>
+  </header>
+
+  <!-- 输入 -->
+  <section class="card" id="step-input">
+    <h2>想去哪、玩几天？</h2>
+    <textarea id="text" placeholder="例如：这周末去长沙两天，两个人，预算 800，不想爬山，想吃美食、拍照"></textarea>
+    <div class="chips" style="margin:10px 0 14px">
+      <button class="chip" data-fill="这周末去长沙两天，两个人，预算 800，不想爬山">长沙 2 天 · 800</button>
+      <button class="chip" data-fill="下周去西安玩三天，预算 1500，想看历史和美食">西安 3 天 · 历史美食</button>
+      <button class="chip" data-fill="一个人去成都两天，节奏慢一点，预算不限">成都 2 天 · 慢节奏</button>
+    </div>
+    <button class="btn" id="btn-parse">帮我理解需求</button>
+    <p class="hint" id="parse-hint"></p>
+  </section>
+
+  <!-- 确认 -->
+  <section class="card" id="step-confirm" style="display:none">
+    <h2>我理解成了这样，对吗？</h2>
+    <p class="muted" style="margin-top:-4px">不对可以直接改，确认后再生成行程。</p>
+
+    <div class="row" style="margin:12px 0 10px">
+      <div>
+        <label class="field">目的地</label>
+        <input id="f-city" />
+      </div>
+      <div style="flex:0 0 90px">
+        <label class="field">天数</label>
+        <input id="f-days" type="number" min="1" max="5" />
+      </div>
+    </div>
+
+    <div class="row" style="margin-bottom:10px">
+      <div>
+        <label class="field">预算（元，可留空）</label>
+        <input id="f-budget" type="number" min="0" step="50" />
+      </div>
+      <div>
+        <label class="field">同行人数</label>
+        <input id="f-companions" type="number" min="1" max="10" />
+      </div>
+      <div>
+        <label class="field">节奏</label>
+        <select id="f-pace">
+          <option value="slow">慢逛</option>
+          <option value="normal">正常</option>
+          <option value="fast">多逛几个</option>
+        </select>
+      </div>
+    </div>
+
+    <label class="field">想玩什么（最多 3 个）</label>
+    <div class="chips" id="pick-interests" style="margin-bottom:12px"></div>
+
+    <label class="field">不想碰到什么</label>
+    <div class="chips" id="pick-avoid" style="margin-bottom:16px"></div>
+
+    <button class="btn" id="btn-create">生成行程</button>
+    <button class="btn ghost" id="btn-back" style="margin-top:8px">重新描述</button>
+  </section>
+
+  <p class="hint" style="text-align:center;margin-top:24px">示例原型：POI 与价格用于演示，出行前请核实</p>
+</div>
+<div class="toast" id="toast"></div>
+<script src="/js/api.js"></script>
+<script src="/js/index.js"></script>
+</body>
+</html>

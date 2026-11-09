@@ -1,0 +1,22 @@
+# Render 一键部署配置（可选）
+# 用法：把仓库连到 Render，它会自动读取本文件
+services:
+  - type: web
+    name: xianxing-zhiche
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
+      # 有模型 Key 时再填，没有就保持 auto（走本地规则）
+      - key: MOCK_MODE
+        value: auto
+      - key: LLM_BASE_URL
+        value: https://api.deepseek.com/v1
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: deepseek-chat
