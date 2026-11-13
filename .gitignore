@@ -4,3 +4,6 @@ __pycache__/
 .env
 data/app.db
 *.lnk
+
+# 分阶段交付的单人版，暂不提交；要提交时删掉这一行
+phase1/
