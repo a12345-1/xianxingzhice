@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>行程 · 闲行智策</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="back" href="/">← 重来</a>
+    <div style="flex:1"></div>
+    <a class="back" href="#" id="nav-budget">预算</a>
+    <a class="back" href="#" id="nav-tips" style="margin-left:6px">贴士</a>
+  </header>
+
+  <div class="sticky" id="summary"></div>
+
+  <div class="card" id="budget-bar" style="display:none"></div>
+  <div class="card">
+    <h2>一句话改行程</h2>
+    <input id="cmd" placeholder="例如：把第二天下午删掉 / 把岳麓山换成湖南博物院" />
+    <button class="btn sm" id="btn-cmd" style="margin-top:8px">改一下</button>
+    <p class="hint" id="cmd-hint"></p>
+  </div>
+  <div id="adjust"></div>
+  <div class="card" id="alert-box" style="display:none"></div>
+
+  <div id="days"></div>
+
+  <div class="card">
+    <button class="btn ghost" id="btn-save">保存这份行程</button>
+  </div>
+</div>
+
+<nav class="nav-bottom">
+  <a href="/"><i>✎</i>规划</a>
+  <a href="#" class="on"><i>☰</i>行程</a>
+  <a href="/saved.html"><i>★</i>我的</a>
+</nav>
+
+<div id="drawer" class="drawer">
+  <div class="drawer-card">
+    <button class="drawer-close" id="drawer-close">×</button>
+    <div id="drawer-body"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/js/api.js"></script>
+<script src="/js/render.js"></script>
+<script src="/js/plan.js"></script>
+</body>
+</html>

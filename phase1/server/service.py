@@ -1,0 +1,589 @@
+# -*- coding: utf-8 -*-
+"""业务编排（单人 MVP）：解析 → 生成 → 校验 → 预算 → 贴士 → 规格化输出。"""
+import re
+import time
+
+from . import db, llm, spec
+from .agents import command as command_agent
+from .agents import parse as parse_agent
+from .agents import plan as plan_agent
+from .agents import tips as tips_agent
+from .agents import validate as validate_agent
+
+
+def _now_ms(t0):
+    return int((time.perf_counter() - t0) * 1000)
+
+
+def _enrich(items):
+    """补 POI 元数据（营业时间、坐标、标签），供校验与规格化使用。"""
+    cache = {}
+    for it in items:
+        pid = it.get("poi_id")
+        if pid and pid not in cache:
+            cache[pid] = db.poi_by_id(pid)
+        poi = cache.get(pid) or {}
+        it["open_hours"] = poi.get("open_hours", "")
+        it["lat"] = poi.get("lat")
+        it["lng"] = poi.get("lng")
+        it["need_booking"] = poi.get("need_booking", 0)
+        if not it.get("tags"):
+            it["tags"] = poi.get("tags", "")
+    return items
+
+
+# ---------------------------------------------------------------- 自动调整
+WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def _hours(text):
+    """解析营业时间区间。
+
+    高德返回的时间串经常带季节/日期段（如“03-16至04-30 周一至周日 08:00-19:00”）
+    或分段营业（“11:00-14:00,16:00-06:00”），这类一律返回 None，表示“不做时间校验”，
+    避免把正常安排误判成超时。
+    """
+    import re
+
+    t = text or ""
+    t = re.sub(r"周一至周日|周一至周五|周一至周六|每日", "", t)
+    t = re.sub(r"\d{4}-\d{2}-\d{2}至\d{4}-\d{2}-\d{2}", "", t)
+    t = re.sub(r"\d{2}-\d{2}至\d{2}-\d{2}", "", t)
+    if "至" in t or "," in t or "，" in t or ";" in t or "；" in t:
+        return None
+    m = re.search(r"(\d{1,2}):(\d{2})\s*[-—~]\s*(\d{1,2}):(\d{2})", t)
+    if not m:
+        return None
+    start = int(m.group(1)) * 60 + int(m.group(2))
+    end = int(m.group(3)) * 60 + int(m.group(4))
+    if start == 0 and end >= 24 * 60:          # 00:00-24:00 = 全天
+        return None
+    return start, end
+
+
+def auto_adjust(tid):
+    """闭馆 / 不在营业时间的条目自动处理，并记录原因。
+
+    规则（按优先级）：
+    1. 不是最后一天 → 顺延到次日末尾；
+    2. 是最后一天 → 就近换成同区域、当天开放的同类地点；
+    3. 换不到 → 删掉并记录。
+    返回 [{day_index, to_day, item_id, name, message}]
+    """
+    from datetime import date
+
+    trip = db.trip_get(tid)
+    start = trip.get("start_date")
+    days = int(trip.get("days") or 1)
+    if not start:
+        return []
+    base = date.fromisoformat(start)
+    out = []
+
+    items = db.items_get(tid)
+    for it in items:
+        poi = db.poi_by_id(it["poi_id"]) if it.get("poi_id") else None
+        if not poi:
+            continue
+        # 只校验景点：餐厅营业时间是分段/夜宵制，酒店是 0 时长，
+        # 对这两类做“超时顺延”会得到很怪的结果。
+        if it["type"] != "attraction":
+            continue
+        weekday = (base.weekday() + it["day_index"] - 1) % 7
+        doc_index = (weekday + 1) % 7                      # 0=周日
+        closed = "周一闭馆" in (poi.get("open_hours") or "") and doc_index == 1
+        rng = _hours(poi.get("open_hours") or "")
+        start_min = _hhmm(it["start_time"])
+        outside = bool(rng) and not (rng[0] <= start_min <= rng[1])
+        if not (closed or outside):
+            continue
+
+        reason = "闭馆" if closed else "不在营业时间"
+
+        # 1) 顺延到次日
+        if it["day_index"] < days:
+            next_day = it["day_index"] + 1
+            rows = sorted([x for x in db.items_get(tid) if x["day_index"] == next_day],
+                          key=lambda y: y["seq"])
+            last_end = 9 * 60
+            if rows:
+                last_end = max(_hhmm(x["start_time"]) + int(x["duration_min"] or 0) for x in rows)
+            new_start = max(9 * 60, last_end + 30)
+            db.item_update(it["id"], {"day_index": next_day, "seq": len(rows) + 1,
+                                      "start_time": f"{new_start // 60:02d}:{new_start % 60:02d}"})
+            _renumber(tid, it["day_index"])
+            _renumber(tid, next_day)
+            out.append({
+                "day_index": it["day_index"], "to_day": next_day, "item_id": f"it_{it['id']}",
+                "name": it["name"],
+                "message": f"{it['name']}{reason}，已顺延到第 {next_day} 天 "
+                           f"{new_start // 60:02d}:{new_start % 60:02d}",
+            })
+            continue
+
+        # 2) 最后一天：换一个当天开放的同类地点
+        used = {x["poi_id"] for x in db.items_get(tid) if x.get("poi_id")}
+        alt = _find_alt(trip["city"], it, doc_index, used)
+        if alt:
+            db.item_update(it["id"], {
+                "name": alt["name"], "cost": alt["price"], "poi_id": alt["id"],
+                "area": alt["area"], "tags": alt["tags"], "duration_min": alt["stay_min"],
+            })
+            out.append({
+                "day_index": it["day_index"], "to_day": it["day_index"], "item_id": f"it_{it['id']}",
+                "name": alt["name"],
+                "message": f"{it['name']}{reason}，已换成 {alt['name']}",
+            })
+        else:
+            db.item_delete(it["id"])
+            _renumber(tid, it["day_index"])
+            out.append({
+                "day_index": it["day_index"], "to_day": None, "item_id": f"it_{it['id']}",
+                "name": it["name"],
+                "message": f"{it['name']}{reason}，当天没有可替换的地点，已移除",
+            })
+    return out
+
+
+def _find_alt(city, it, doc_index, used):
+    """同区域、同类型、当天开放且没用过的地点。"""
+    for p in db.poi_list(city):
+        if p["id"] in used or p["type"] != it["type"]:
+            continue
+        if "周一闭馆" in (p.get("open_hours") or "") and doc_index == 1:
+            continue
+        if it.get("area") and p["area"] != it["area"]:
+            continue
+        return p
+    return None
+
+
+def parse_text(text):
+    return parse_agent.parse_need(text)
+
+
+class NoCityData(Exception):
+    """目的地没有 POI 数据，不允许静默回退到别的城市。"""
+
+    def __init__(self, city, cities):
+        self.city = city
+        self.cities = cities
+        super().__init__(f"no data for {city}")
+
+
+class UnknownCity(Exception):
+    """输入里提到的地方不认识（例如“霍格沃茨”），绝不生成假行程。"""
+
+    def __init__(self, raw_text=""):
+        self.raw_text = raw_text
+        super().__init__("unknown city")
+
+
+def create_trip(need, raw_text="", budget_limit=None):
+    city = need.get("city") or "长沙"
+    if city == "__unknown__":
+        raise UnknownCity(raw_text)
+    days = max(1, min(int(need.get("days") or 2), 15))
+    pois = db.poi_list(city)
+    if not pois:
+        raise NoCityData(city, db.cities())
+
+    plan = plan_agent.plan_days({**need, "days": days}, pois)
+    people = int(need.get("people") or need.get("companions") or 1)
+    limit = budget_limit if budget_limit else need.get("budget")
+    if isinstance(limit, str):
+        limit = None
+
+    tid = db.trip_create(f"{city} · {days} 天行程", city, days, need.get("start_date"),
+                         limit, need, raw_text=raw_text, people=people)
+    for d in plan:
+        db.items_replace_day(tid, d["day"], d["items"])
+    return tid
+
+
+# ---------------------------------------------------------------- 生成
+def generate(raw_text, day_count, budget_limit, city=None):
+    """跑完整条链，返回（规格化响应, 各智能体耗时）。"""
+    timings = []
+
+    t = time.perf_counter()
+    need = parse_agent.parse_need(raw_text)
+    need["days"] = int(day_count)
+    if city:                                  # 反问流程里用户选的，优先于文本解析
+        need["city"] = city
+        need["city_unknown"] = False
+        need["city_explicit"] = True
+    if budget_limit:
+        need["budget"] = budget_limit
+    timings.append({"name": "需求解析", "status": "ok", "ms": _now_ms(t)})
+
+    t = time.perf_counter()
+    tid = create_trip(need, raw_text, budget_limit)
+    timings.append({"name": "路线生成", "status": "ok", "ms": _now_ms(t)})
+
+    t = time.perf_counter()
+    adjusts = auto_adjust(tid)
+    db.trip_set_adjustments(tid, adjusts)
+    data = spec_payload(tid, with_note=True)
+    timings.append({"name": "时间校验", "status": "ok", "ms": _now_ms(t)})
+
+    t = time.perf_counter()
+    _ = data["budget"]
+    timings.append({"name": "预算核算", "status": "ok", "ms": _now_ms(t)})
+
+    t = time.perf_counter()
+    _ = data["tips"]
+    data["meta"]["model"] = "deepseek-chat" if need.get("source") == "llm" else "local-rules"
+    data["meta"]["parse_source"] = need.get("source", "local")
+    timings.append({"name": "贴士生成", "status": "ok", "ms": _now_ms(t)})
+
+    return data, timings
+
+
+def spec_payload(tid, with_note=False):
+    trip = db.trip_get(tid)
+    if not trip:
+        return None
+    items = _enrich(db.items_get(tid))
+    need = trip.get("need") or {}
+    conflicts = validate_agent.validate(items, trip, need)
+    tips = tips_agent.make_tips(trip, items)
+    if with_note:
+        note = tips_agent.polish(trip.get("city"), [
+            {"day": d["day_index"], "items": [i["name"] for i in d["items"]]}
+            for d in _group_days(items)
+        ], tips)
+        if note:
+            tips["note"] = note
+            tips["note_source"] = "model"
+            db.trip_set_tips_note(tid, note)
+    elif trip.get("tips_note"):                 # 页面刷新时用上次生成的结果，不再调模型
+        tips["note"] = trip["tips_note"]
+        tips["note_source"] = "model"
+    data = spec.build(trip, need, items, conflicts, tips)
+    data["trip_id"] = trip.get("code") or data["trip_id"]
+    return data
+
+
+def _group_days(items):
+    out = {}
+    for it in items:
+        out.setdefault(it["day_index"], []).append(it)
+    return [{"day_index": k, "items": v} for k, v in sorted(out.items())]
+
+
+def spec_item(tid, item_id):
+    data = spec_payload(tid)
+    for d in data["days"]:
+        for it in d["items"]:
+            if it["item_id"] == item_id:
+                return it
+    return None
+
+
+# ---------------------------------------------------------------- item_id 解析
+def _locate(tid, item_id):
+    """item_id 形如 it_42，直接对应 items 表主键，增删后不漂移。"""
+    try:
+        return int(str(item_id).split("_")[1])
+    except Exception:
+        return None
+
+
+def _db_item(tid, item_id):
+    iid = _locate(tid, item_id)
+    if not iid:
+        return None
+    it = db.item_get(iid)
+    return it if it and it["trip_id"] == tid else None
+
+
+def _renumber(tid, day):
+    rows = [x for x in db.items_get(tid) if x["day_index"] == day]
+    for i, x in enumerate(sorted(rows, key=lambda y: y["seq"]), start=1):
+        db.item_update(x["id"], {"seq": i})
+
+
+# ---------------------------------------------------------------- 编辑
+def apply_patch(tid, item_id, action, patch):
+    it = _db_item(tid, item_id)
+    if not it:
+        return False
+
+    if action == "delete":
+        db.item_delete(it["id"])
+        _renumber(tid, it["day_index"])
+        return True
+
+    if action == "update":
+        fields = {}
+        for k in ("start_time", "duration_min", "cost", "name", "note"):
+            if k in patch and patch[k] is not None:
+                fields[k] = patch[k]
+        db.item_update(it["id"], fields)
+        return True
+
+    if action == "reorder":
+        target = int(patch.get("seq") or 1)
+        day_rows = sorted([x for x in db.items_get(tid) if x["day_index"] == it["day_index"]],
+                          key=lambda y: y["seq"])
+        cur = next(i for i, x in enumerate(day_rows) if x["id"] == it["id"])
+        day_rows.insert(max(1, min(target, len(day_rows))) - 1, day_rows.pop(cur))
+        for i, x in enumerate(day_rows, start=1):
+            db.item_update(x["id"], {"seq": i})
+        return True
+
+    if action == "insert":
+        new = patch.get("item") or {}
+        name = new.get("name") or "新增地点"
+        db.items_replace_day(tid, it["day_index"], [{
+            "type": new.get("type", "attraction"), "name": name,
+            "start": new.get("start_time", "12:00"),
+            "duration_min": int(new.get("duration_min") or 60),
+            "cost": float(new.get("cost") or 0), "poi_id": None,
+            "area": it.get("area"), "tags": "", "note": "",
+        }])
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------- 详情
+def item_detail(tid, item_id):
+    it = _db_item(tid, item_id)
+    if not it:
+        return None
+    poi = db.poi_by_id(it["poi_id"]) if it.get("poi_id") else {}
+    reviews = db.poi_reviews(it["poi_id"]) if it.get("poi_id") else []
+    return {
+        "item_id": item_id,
+        "name": it["name"],
+        "type": it["type"],
+        "area": it.get("area"),
+        "start_time": it["start_time"],
+        "duration_min": it["duration_min"],
+        "cost": int(float(it.get("cost") or 0)),
+        "open_hours": (poi or {}).get("open_hours"),
+        "intro": (poi or {}).get("intro") or "暂无简介（示例数据）",
+        "rating": (poi or {}).get("rating"),
+        "address": (poi or {}).get("address") or it.get("area") or "",
+        "lat": (poi or {}).get("lat"),
+        "lng": (poi or {}).get("lng"),
+        "reviews": reviews,
+        "reviews_source": "示例评价（知识库）",
+    }
+
+
+# ---------------------------------------------------------------- 突发重规划
+def _hhmm(s):
+    try:
+        h, m = str(s).split(":")
+        return int(h) * 60 + int(m)
+    except Exception:
+        return 0
+
+
+def reroute(tid, mode, item_id=None, extra_min=60):
+    trip = db.trip_get(tid)
+    items = db.items_get(tid)
+    if not items:
+        return False
+
+    if item_id:
+        it = _db_item(tid, item_id)
+        day = it["day_index"] if it else 1
+        start_seq = it["seq"] if it else 1
+    else:
+        day, start_seq = 1, 1
+
+    day_rows = sorted([x for x in items if x["day_index"] == day], key=lambda y: y["seq"])
+
+    if mode == "rain":
+        kept = [x for x in day_rows if x["seq"] <= start_seq]
+        rest = [x for x in day_rows if x["seq"] > start_seq]
+        for x in rest:
+            db.item_delete(x["id"])
+        if rest:
+            db.items_replace_day(tid, day, [{
+                "type": "attraction", "name": "就近避雨：附近商场 / 咖啡馆", "start": "15:00",
+                "duration_min": 60, "cost": 30, "poi_id": None,
+                "area": (kept[-1].get("area") if kept else ""), "tags": "室内", "note": "雨天备选",
+            }])
+            rows = sorted([x for x in db.items_get(tid) if x["day_index"] == day],
+                          key=lambda y: y["seq"])
+            for i, x in enumerate(rows, start=1):
+                db.item_update(x["id"], {"seq": i})
+        _renumber(tid, day)
+        return True
+
+    if mode == "late":
+        for x in day_rows:
+            if x["seq"] <= start_seq:
+                continue
+            start_min = _hhmm(x["start_time"]) + extra_min
+            if start_min > 21 * 60 + 30:
+                db.item_delete(x["id"])
+            else:
+                db.item_update(x["id"], {"start_time": f"{start_min // 60:02d}:{start_min % 60:02d}"})
+        _renumber(tid, day)
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------- 多轮补槽
+SLOT_QUESTIONS = {
+    "city": {
+        "question": "想去哪个城市？",
+        "hint": "直接选一个，或在输入框里写明城市",
+    },
+    "days": {
+        "question": "玩几天？",
+        "hint": "1—15 天，周末一般 2 天",
+    },
+    "budget": {
+        "question": "大概多少预算？（可以留空表示不限）",
+        "hint": "含吃住行的打包总预算，单位元",
+    },
+}
+
+
+def clarify(raw_text, answers=None, known=None):
+    """输入检测 → 缺什么补什么（TC-06 的反问三连）。
+
+    known 是前端已经填好的字段（天数输入框、预算输入框），有值就不再问。
+    """
+    answers = answers or {}
+    known = known or {}
+    text = (raw_text or "").strip()
+    need = parse_agent.parse_need(text)
+    need.update({k: v for k, v in answers.items() if v not in (None, "", [])})
+
+    missing, questions = [], []
+
+    def ask(slot, extra=None):
+        missing.append(slot)
+        q = dict(SLOT_QUESTIONS[slot], slot=slot)
+        if extra:
+            q["message"] = extra
+        questions.append(q)
+
+    # 城市
+    city = need.get("city")
+    if need.get("city_unknown"):
+        token = ""
+        m = re.search(r"去\s*([\u4e00-\u9fff]{2,5})", text) or \
+            re.search(r"([\u4e00-\u9fff]{2,6}?)(?=\d?\s*[天日])", text)
+        if m and parse_agent._looks_like_place(m.group(1)):
+            token = m.group(1)
+        ask("city", f"「{token}」我这边暂时没有景点数据" if token else "没认出目的地城市")
+    elif not need.get("city_explicit") and not known.get("city") and not answers.get("city"):
+        ask("city", "从输入里没看出目的地")
+
+    # 天数：输入框有值就不问
+    if not known.get("days") and not re.search(r"[0-9一二两三四五六七八九十]\s*[天日]", text):
+        ask("days")
+
+    # 预算：输入框有值、文本里有数字、或明确说“不限”，就不问
+    if not known.get("budget") and need.get("budget") is None \
+            and not any(w in text for w in ("不限", "随意", "看着来", "没预算")):
+        ask("budget")
+
+    return {
+        "need": need,
+        "missing": missing,
+        "questions": questions,
+        "ready": not missing,
+        "supported_cities": db.cities(),
+    }
+
+
+# ---------------------------------------------------------------- 一句话改行程
+class NoModel(Exception):
+    """没配模型 Key，指令理解用不了。"""
+
+
+def _find_item(tid, name, day_index=None):
+    rows = db.items_get(tid)
+    if day_index:
+        rows = [x for x in rows if x["day_index"] == int(day_index)]
+    for x in rows:
+        if x["name"] == name:
+            return x
+    for x in rows:                                  # 退一步：包含匹配
+        if name and (name in x["name"] or x["name"] in name):
+            return x
+    return None
+
+
+def _find_poi(city, name):
+    if not name:
+        return None
+    pool = db.poi_list(city)
+    for p in pool:
+        if p["name"] == name:
+            return p
+    for p in pool:
+        if name in p["name"] or p["name"] in name:
+            return p
+    return None
+
+
+def apply_command(tid, text):
+    """模型理解指令 → 代码执行。返回 {ok, action, message}。"""
+    if not llm.available():
+        raise NoModel()
+
+    trip = db.trip_get(tid)
+    data = spec_payload(tid)
+    act = command_agent.parse(text, trip, data["days"])
+    if not act:
+        return {"ok": False, "action": None, "message": "这句没听懂，换个说法试试"}
+
+    action = act.get("action")
+    msg = (act.get("message") or "").strip()
+    target = (act.get("target") or "").strip()
+    item = _find_item(tid, target, act.get("day_index"))
+
+    if action == "info" or not item:
+        return {"ok": False, "action": action,
+                "message": msg or f"没在行程里找到「{target}」，可以手动改"}
+
+    if action == "delete":
+        db.item_delete(item["id"])
+        _renumber(tid, item["day_index"])
+        return {"ok": True, "action": "delete",
+                "message": msg or f"已删掉「{item['name']}」"}
+
+    if action == "move":
+        start = act.get("start_time") or ""
+        if not re.fullmatch(r"\d{1,2}:\d{2}", start):
+            return {"ok": False, "action": "move", "message": "没给具体时间，可以手动改"}
+        db.item_update(item["id"], {"start_time": start})
+        return {"ok": True, "action": "move",
+                "message": msg or f"已把「{item['name']}」挪到 {start}"}
+
+    if action in ("replace", "insert"):
+        replacement = (act.get("replacement") or "").strip()
+        poi = _find_poi(trip["city"], replacement)
+        if not poi:
+            return {"ok": False, "action": action,
+                    "message": f"资料库里没有「{replacement}」，可以手动改"}
+        if action == "replace":
+            db.item_update(item["id"], {
+                "name": poi["name"], "poi_id": poi["id"], "cost": poi["price"],
+                "duration_min": poi["stay_min"], "area": poi["area"], "tags": poi["tags"],
+            })
+            return {"ok": True, "action": "replace",
+                    "message": msg or f"已把「{item['name']}」换成「{poi['name']}」"}
+        rows = [x for x in db.items_get(tid) if x["day_index"] == item["day_index"]]
+        db.item_add(tid, item["day_index"], {
+            "type": poi["type"], "name": poi["name"], "start": "15:00",
+            "duration_min": poi["stay_min"], "cost": poi["price"], "poi_id": poi["id"],
+            "area": poi["area"], "tags": poi["tags"], "note": "对话新增",
+        })
+        return {"ok": True, "action": "insert",
+                "message": msg or f"已加上「{poi['name']}」"}
+
+    return {"ok": False, "action": action,
+            "message": msg or f"暂不支持「{action}」，可以手动改"}

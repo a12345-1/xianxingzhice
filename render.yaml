@@ -1,11 +1,12 @@
-# Render 一键部署配置（可选）
-# 用法：把仓库连到 Render，它会自动读取本文件
+# Render 一键部署配置
+# 线上跑的是 phase1（单人版）；根目录那套是早期版本，仅作参考
 services:
   - type: web
     name: xianxing-zhice
     runtime: python
     plan: free
     region: singapore
+    rootDir: phase1
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn server.main:app --host 0.0.0.0 --port $PORT
     envVars:
@@ -20,3 +21,6 @@ services:
         sync: false
       - key: LLM_MODEL
         value: deepseek-chat
+      # 高德 Key，用于「联网获取该城市地点」
+      - key: AMAP_KEY
+        sync: false
