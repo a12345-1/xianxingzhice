@@ -92,15 +92,115 @@ function renderItems() {
     const id = el.dataset.id;
     el.querySelector(".body").onclick = (ev) => {
       if (ev.target.closest("button")) return;
+      if (JUST_DRAGGED) return;
       OPEN = OPEN === id ? null : id;
       renderItems();
     };
+    bindDrag(el);
   });
   box.querySelectorAll("[data-act]").forEach((b) => {
     b.onclick = (ev) => { ev.stopPropagation(); onAct(b.dataset.act, b.dataset.id); };
   });
   const addBtn = box.querySelector("#add-item");
   if (addBtn) addBtn.onclick = openAddPlace;
+}
+
+/* ---------------- 长按拖拽排序（手机/电脑通用，纯 Pointer 事件） ----------------
+   规则：按住 0.5 秒进入拖拽（期间页面仍可滚动）；进入后锁定滚动，
+   按指针位置实时换位，松手时只调一次 PATCH reorder，时间由后端重算。 */
+const DRAG = { timer: null, active: false, el: null, id: null, from: 0, to: 0, startY: 0, startX: 0 };
+let JUST_DRAGGED = false;
+
+function bindDrag(el) {
+  el.addEventListener("contextmenu", (ev) => {
+    if (DRAG.active) ev.preventDefault();   // 长按不要弹系统菜单
+  });
+  el.addEventListener("pointerdown", (ev) => {
+    if (ev.button && ev.button !== 0) return;
+    if (ev.target.closest("button")) return;
+    DRAG.el = el;
+    DRAG.id = el.dataset.id;
+    DRAG.startY = ev.clientY;
+    DRAG.startX = ev.clientX;
+    DRAG.active = false;
+    const box = document.getElementById("items");
+    DRAG.from = [...box.querySelectorAll(".item")].indexOf(el);
+
+    clearTimeout(DRAG.timer);
+    DRAG.timer = setTimeout(() => {
+      DRAG.active = true;
+      el.classList.add("dragging");
+      el.style.touchAction = "none";      // 激活后不再让页面跟着滚
+      document.body.classList.add("drag-lock");
+      if (navigator.vibrate) navigator.vibrate(15);
+      window.getSelection && window.getSelection().removeAllRanges();
+    }, 500);
+
+    const onMove = (e) => {
+      const dy = Math.abs(e.clientY - DRAG.startY);
+      const dx = Math.abs(e.clientX - DRAG.startX);
+      if (!DRAG.active) {
+        if (dy > 8 || dx > 12) cancelDrag();   // 先动就是滚动，不进入拖拽
+        return;
+      }
+      e.preventDefault();
+      placeAt(e.clientY);
+    };
+
+    const onUp = async () => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      clearTimeout(DRAG.timer);
+      if (!DRAG.active) return;
+
+      const moved = DRAG.to !== DRAG.from;
+      el.classList.remove("dragging");
+      el.style.touchAction = "";
+      document.body.classList.remove("drag-lock");
+      DRAG.active = false;
+      if (!moved) return;
+
+      JUST_DRAGGED = true;
+      setTimeout(() => { JUST_DRAGGED = false; }, 350);
+      try {
+        DATA = await API.patch(TRIP_ID, DRAG.id, "reorder", { seq: DRAG.to + 1 });
+        markDirty();
+        render();
+        toast("已挪动，时间已重排");
+      } catch (err) {
+        toast(err.message);
+        render();
+      }
+    };
+
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+    if (el.setPointerCapture) {
+      try { el.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+    }
+  });
+}
+
+function cancelDrag() {
+  clearTimeout(DRAG.timer);
+  DRAG.active = false;
+}
+
+function placeAt(y) {
+  const box = document.getElementById("items");
+  const items = [...box.querySelectorAll(".item")];
+  let target = items.findIndex((el) => {
+    const r = el.getBoundingClientRect();
+    return y < r.top + r.height / 2;
+  });
+  if (target === -1) target = items.length - 1;
+  const cur = items.indexOf(DRAG.el);
+  if (target === cur) { DRAG.to = cur; return; }
+  if (target > cur) items[target].after(DRAG.el);
+  else items[target].before(DRAG.el);
+  DRAG.to = [...box.querySelectorAll(".item")].indexOf(DRAG.el);
 }
 
 function durationText(it) {
