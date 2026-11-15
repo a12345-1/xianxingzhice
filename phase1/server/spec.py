@@ -183,6 +183,11 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
             "walk_level": _walk_level(lst),
             "day_cost": day_cost,
             "items": day_items,
+            # 空白天要说清是“没排到”还是“数据不够”，不要只说一句“还空着”
+            "empty_reason": None if day_items else (
+                f"这天没有可安排的地点了 —— {trip.get('data_note') or '该城市收录的数据已用完'}，"
+                "可以考虑减少天数、换城市，或手动添加地点"
+            ),
         })
 
     budget = _budget(items, total, trip.get("budget_limit"), people)
@@ -219,6 +224,7 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
             "model": "local-rules",
             "agents": agents or [],
             "adjustments": trip.get("adjust_list") or [],
+            "data_note": trip.get("data_note"),
         },
     }
 

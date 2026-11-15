@@ -317,3 +317,8 @@ body.drag-lock { overflow: hidden; }
 .drag-handle:active { cursor: grabbing; color: var(--brand); }
 .item.dragging { opacity: .96; }
 .item .time { padding-left: 4px; }
+
+/* P1 反问卡片 */
+.ask-row { margin: 10px 0; }
+.ask-row input { width: 100%; }
+.chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }

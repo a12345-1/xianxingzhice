@@ -28,11 +28,13 @@ SYSTEM = """你是短途行程规划师。基于候选地点生成 {days} 天行
 
 
 def plan_days(need: dict, pois: list) -> list:
+    """排程永远走本地代码。
+
+    模型只负责“理解需求”和“写文案”（见 parse.py / tips.py）；
+    让模型排行程会出现同一景点重复、时间不按营业时间算的问题，
+    也会让结果不可复现，所以这里不做模型分支。
+    """
     days = int(need.get("days") or 2)
-    if llm.available():
-        out = _plan_with_llm(need, pois)
-        if out:
-            return out
     return _plan_local(need, pois, days)
 
 

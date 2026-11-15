@@ -293,6 +293,15 @@ def spec_payload(tid, with_note=False):
         return None
     items = _enrich(db.items_get(tid))
     need = trip.get("need") or {}
+
+    # 数据口径：这个城市到底收录了多少地点，空白天要据此解释
+    pool = db.poi_list(trip["city"])
+    trip = dict(trip)
+    trip["data_note"] = (f"{trip['city']} 目前收录 {len(pool)} 个地点"
+                         f"（景点 {sum(1 for p in pool if p['type'] == 'attraction')}"
+                         f" / 餐饮 {sum(1 for p in pool if p['type'] == 'food')}"
+                         f" / 住宿 {sum(1 for p in pool if p['type'] == 'hotel')}）")
+
     conflicts = validate_agent.validate(items, trip, need)
     tips = tips_agent.make_tips(trip, items)
     if with_note:

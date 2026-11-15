@@ -83,7 +83,14 @@ function renderItems() {
   const d = currentDay();
   const box = document.getElementById("items");
   if (!d.items.length) {
-    box.innerHTML = `<div class="empty">这天还空着</div>`;
+    box.innerHTML = `
+      <div class="card" style="background:#fff9ec;border-left:3px solid #c98a00">
+        <strong>这天没有可安排的地点</strong>
+        <p class="hint" style="margin-top:6px">${esc(d.empty_reason || "该城市收录的数据已用完")}</p>
+      </div>
+      <div class="add-item" id="add-item">＋ 手动加一个地点</div>`;
+    const b = box.querySelector("#add-item");
+    if (b) b.onclick = openAddPlace;
     return;
   }
   box.innerHTML = d.items.map((it) => itemCard(it)).join("") +

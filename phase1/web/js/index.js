@@ -67,19 +67,34 @@ function validate() {
 }
 
 /* ---------- 生成 ---------- */
-async function submit(force, dayOverride) {
+async function submit(force, dayOverride, answers) {
   const errs = validate();
   if (errs.length) { $("err").textContent = errs[0]; return; }
 
-  const days = dayOverride || state.days;
+  const text = $("text").value.trim();
+
+  // 先做一次输入检测：缺城市/天数/预算就先问，不硬生成
+  if (!answers) {
+    try {
+      const chat = await API.chat(text, {}, {
+        days: state.daysTouched ? state.days : null,
+        budget: state.budgetTouched ? state.budget : null,
+      });
+      if (!chat.ready) { renderAsk(chat); return; }
+    } catch (e) { /* 检测失败就继续生成，交给后端兜底 */ }
+  }
+
+  const days = (answers && answers.days) || dayOverride || state.days;
+  const budget = answers ? answers.budget : state.budget;
+  const city = answers ? answers.city : null;
   const btn = $("gen");
   btn.disabled = true;
   btn.textContent = "正在规划…";
   $("err").textContent = "";
   $("ask").innerHTML = "";
   try {
-    const trip = await API.generate($("text").value.trim(), days, state.budget, null, force,
-                                    state.daysTouched);
+    const trip = await API.generate(text, days, budget, city, force,
+                                    state.daysTouched || !!answers);
     localStorage.setItem("last_trip", trip.trip_id);
     location.href = `/plan.html?trip=${encodeURIComponent(trip.trip_id)}`;
   } catch (e) {
@@ -97,6 +112,63 @@ async function submit(force, dayOverride) {
     btn.disabled = false;
     btn.textContent = "生成我的行程";
   }
+}
+
+/* 缺信息时直接问：城市给按钮、天数给步进器、预算给输入框 */
+function renderAsk(chat) {
+  const cities = chat.supported_cities || [];
+  const qs = chat.questions || [];
+  const blocks = qs.map((q) => {
+    const msg = q.message ? `<span class="muted">（${esc(q.message)}）</span>` : "";
+    if (q.slot === "city") {
+      return `<div class="ask-row" data-slot="city">
+        <label class="field">${esc(q.question)} ${msg}</label>
+        <div class="chips" style="margin-top:6px">${
+          cities.map((c) => `<button class="chip" data-city="${esc(c)}">${esc(c)}</button>`).join("")
+        }</div>
+      </div>`;
+    }
+    if (q.slot === "days") {
+      return `<div class="ask-row" data-slot="days">
+        <label class="field">${esc(q.question)}</label>
+        <input type="number" min="1" max="15" value="${state.days || 2}" />
+      </div>`;
+    }
+    return `<div class="ask-row" data-slot="budget">
+      <label class="field">${esc(q.question)}</label>
+      <input type="number" min="0" step="100" placeholder="留空 = 不限" />
+    </div>`;
+  }).join("");
+
+  $("ask").innerHTML = `
+    <div class="card" style="background:#fff9ec;border-left:3px solid #c98a00">
+      <h2 style="margin-bottom:6px">还差一点信息</h2>
+      ${blocks}
+      <button class="btn block" id="ask-go" style="margin-top:10px">好，生成行程</button>
+      <button class="btn ghost block" id="ask-cancel" style="margin-top:8px">算了，我重新说</button>
+    </div>`;
+
+  $("ask").querySelectorAll("[data-city]").forEach((b) => {
+    b.onclick = () => {
+      $("ask").querySelectorAll("[data-city]").forEach((x) => x.classList.remove("on"));
+      b.classList.add("on");
+    };
+  });
+
+  $("ask-cancel").onclick = () => { $("ask").innerHTML = ""; };
+  $("ask-go").onclick = () => {
+    const picked = $("ask").querySelector("[data-city].on");
+    const city = picked ? picked.dataset.city : null;
+    if (qs.some((q) => q.slot === "city") && !city) return toast("先选一个城市");
+    const daysEl = $("ask").querySelector('[data-slot="days"] input');
+    const budgetEl = $("ask").querySelector('[data-slot="budget"] input');
+    const answers = {
+      city: city,
+      days: daysEl ? Number(daysEl.value) || state.days : state.days,
+      budget: budgetEl && budgetEl.value ? Number(budgetEl.value) : null,
+    };
+    submit(false, null, answers);
+  };
 }
 
 function showCityAsk(cities, message) {
