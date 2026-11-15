@@ -27,15 +27,20 @@ SYSTEM = """你是短途行程规划师。基于候选地点生成 {days} 天行
 "start":"09:30","duration_min":90,"cost":0}}]}}]}}"""
 
 
-def plan_days(need: dict, pois: list) -> list:
-    """排程永远走本地代码。
+def plan_days(need: dict, pois: list):
+    """返回 (按天的条目列表, 规划说明)。
 
-    模型只负责“理解需求”和“写文案”（见 parse.py / tips.py）；
-    让模型排行程会出现同一景点重复、时间不按营业时间算的问题，
-    也会让结果不可复现，所以这里不做模型分支。
+    先让模型提议（propose.py），再由 _guard 用代码裁决：去重、补足、距离、
+    预算、时间。模型不可用或输出不可用时退回本地排程。
     """
     days = int(need.get("days") or 2)
-    return _plan_local(need, pois, days)
+    if llm.available():
+        out = _plan_guarded(need, pois, days)
+        if out:
+            plan, info = out
+            if plan:
+                return plan, info
+    return _plan_local(need, pois, days), {"source": "local", "fixes": [], "note": ""}
 
 
 # ---------------------------------------------------------------- 本地
@@ -196,39 +201,192 @@ def _entry(poi: dict, start_min: int) -> dict:
         "note": "",
     }
 
+# ---------------------------------------------------------------- 模型提议 + 代码把关
+MAX_HOP_KM = 15          # 同一天两点直线距离超过它，视为“来回跑”
+LUNCH_T = 11 * 60 + 45
+DINNER_T = 17 * 60 + 30
+HOTEL_T = 19 * 60
 
-# ---------------------------------------------------------------- 模型
-def _plan_with_llm(need: dict, pois: list):
+
+def _plan_guarded(need: dict, pois: list, days: int):
+    """模型挑点 -> 代码校验修复 -> 生成带时间的条目。
+
+    返回 (plan, info)；模型不可用返回 None。
+    info = {"source": "llm+guard", "note": ..., "fixes": [...]}
+    """
+    from . import propose
+
     cand = [p for p in pois if _match(p, need)]
-    brief = [
-        {"name": p["name"], "type": p["type"], "area": p["area"],
-         "price": p["price"], "stay_min": p["stay_min"], "tags": p["tags"]}
-        for p in cand
-    ]
-    user = json.dumps({"need": need, "candidates": brief}, ensure_ascii=False)
-    out = llm.complete_json(
-        SYSTEM.format(days=need.get("days", 2), n=PACE_POINTS.get(need.get("pace"), 3)), user
-    )
-    if not out or "days" not in out:
+    if not cand:
+        return None
+    raw, note = propose.propose(need, cand)
+    if not raw:
         return None
 
+    fixes = []
     by_name = {p["name"]: p for p in cand}
-    days = []
-    for d in out["days"]:
-        items = []
-        for it in d.get("items", []):
-            poi = by_name.get(it.get("name"))
+
+    def lookup(name):
+        name = (name or "").strip()
+        if not name:
+            return None
+        if name in by_name:
+            return by_name[name]
+        for p in cand:
+            if name in p["name"] or p["name"] in name:
+                return p
+        return None
+
+    used = set()
+    picked = []
+    for idx in range(1, days + 1):
+        d = next((x for x in raw["days"] if int(x.get("day_index") or 0) == idx), None)
+        if d is None and idx - 1 < len(raw["days"]):
+            d = raw["days"][idx - 1]
+        d = d or {}
+
+        spots, foods, hotel = [], [], None
+        for name in (d.get("spots") or [])[:3]:
+            poi = lookup(name)
             if not poi:
+                if name:
+                    fixes.append("模型提到的「%s」不在候选库，已忽略" % name)
                 continue
+            if poi["type"] != "attraction":
+                continue
+            if poi["id"] in used:
+                fixes.append("「%s」被重复安排，只保留第一次" % poi["name"])
+                continue
+            spots.append(poi)
+            used.add(poi["id"])
+
+        for name in (d.get("foods") or [])[:2]:
+            poi = lookup(name)
+            if not poi or poi["type"] != "food" or poi["id"] in used:
+                continue
+            foods.append(poi)
+            used.add(poi["id"])
+
+        h = lookup(d.get("hotel"))
+        if h and h["type"] == "hotel" and h["id"] not in used:
+            hotel = h
+            used.add(h["id"])
+
+        picked.append({"day": idx, "spots": spots, "foods": foods, "hotel": hotel})
+
+    # 补足：每天至少 2 个景点
+    for p in picked:
+        pool = [x for x in cand if x["type"] == "attraction" and x["id"] not in used]
+        pool.sort(key=lambda x: _score(x, need), reverse=True)
+        while len(p["spots"]) < 2 and pool:
+            extra = pool.pop(0)
+            p["spots"].append(extra)
+            used.add(extra["id"])
+            fixes.append("第 %d 天景点不足，补了「%s」" % (p["day"], extra["name"]))
+
+    # 距离：同一天相邻两点太远就换近的，换不到就删
+    for p in picked:
+        i = 0
+        while i < len(p["spots"]) - 1:
+            a, b = p["spots"][i], p["spots"][i + 1]
+            km = _km(a, b)
+            if km <= MAX_HOP_KM:
+                i += 1
+                continue
+            pool = [x for x in cand if x["type"] == "attraction" and x["id"] not in used]
+            pool.sort(key=lambda x: _km(a, x))
+            if pool and _km(a, pool[0]) < km:
+                new = pool[0]
+                fixes.append("「%s」到「%s」约 %.0f 公里，把后者换成「%s」"
+                             % (a["name"], b["name"], km, new["name"]))
+                p["spots"][i + 1] = new
+                used.add(new["id"])
+            else:
+                fixes.append("「%s」到「%s」约 %.0f 公里且无更近替代，删掉后者"
+                             % (a["name"], b["name"], km))
+                p["spots"].pop(i + 1)
+            i += 1
+
+    # 预算：超支先砍最贵的收费景点，再降住宿
+    limit = need.get("budget_limit")
+    try:
+        limit = int(limit) if limit not in (None, "", "low") else None
+    except (TypeError, ValueError):
+        limit = None
+
+    def total_of(ps):
+        s = 0.0
+        for p in ps:
+            for x in p["spots"] + p["foods"] + ([p["hotel"]] if p["hotel"] else []):
+                s += float(x["price"] or 0)
+        return s
+
+    if limit:
+        guard = 0
+        while total_of(picked) > limit and guard < 6:
+            paid = [(p["day"], x) for p in picked for x in p["spots"] if float(x["price"] or 0) > 0]
+            if paid:
+                day_i, worst = max(paid, key=lambda t: float(t[1]["price"] or 0))
+                for p in picked:
+                    if p["day"] == day_i and worst in p["spots"]:
+                        p["spots"].remove(worst)
+                        fixes.append("超出预算，去掉最贵的「%s」（¥%d）"
+                                     % (worst["name"], int(worst["price"])))
+                        break
+            else:
+                hotels = [p for p in picked if p["hotel"]]
+                if not hotels:
+                    break
+                p0 = hotels[0]
+                old = p0["hotel"]
+                old_price = float(old.get("price") or 0)
+                # 只能往更便宜的方向走，否则会来回换、死循环
+                cheaper = [x for x in cand if x["type"] == "hotel"
+                           and x["id"] not in used
+                           and float(x["price"] or 0) < old_price]
+                cheaper.sort(key=lambda x: float(x["price"] or 0))
+                if not cheaper:
+                    break
+                used.discard(old["id"])
+                p0["hotel"] = cheaper[0]
+                used.add(cheaper[0]["id"])
+                fixes.append("超出预算，住宿从「%s」降为「%s」" % (old["name"], cheaper[0]["name"]))
+            guard += 1
+
+    # 生成条目并排时间
+    plan = []
+    for p in picked:
+        items, t = [], DAY_START
+        for idx, poi in enumerate(p["spots"]):
+            t = max(t, earliest(poi))
+            items.append(_entry(poi, t))
+            t += int(poi["stay_min"] or 60) + BUFFER_MIN
+        if p["foods"]:
+            food = p["foods"][0]
+            lunch = max(t, LUNCH_T if t < 13 * 60 else DINNER_T)
+            items.append(_entry(food, lunch))
+            t = lunch + int(food["stay_min"] or 60)
+        if len(p["foods"]) > 1:
+            food2 = p["foods"][1]
+            dinner = max(t, DINNER_T)
+            if dinner <= 20 * 60:
+                items.append(_entry(food2, dinner))
+                t = dinner + int(food2["stay_min"] or 60)
+        if p["hotel"] and p["day"] < days:
             items.append({
-                "type": poi["type"], "name": poi["name"],
-                "start": it.get("start", "09:30"),
-                "duration_min": int(it.get("duration_min") or poi["stay_min"]),
-                "cost": float(it.get("cost") or poi["price"] or 0),
-                "poi_id": poi["id"], "area": poi["area"],
-                "tags": poi["tags"], "note": it.get("reason", ""),
+                "type": "hotel", "name": p["hotel"]["name"], "start": _fmt(max(t, HOTEL_T)),
+                "duration_min": 0, "cost": p["hotel"]["price"], "poi_id": p["hotel"]["id"],
+                "area": p["hotel"]["area"], "tags": p["hotel"]["tags"], "note": "住宿",
             })
-        if items:
-            days.append({"day": int(d.get("day") or len(days) + 1),
-                         "theme": d.get("theme", ""), "items": items})
-    return days or None
+        plan.append({"day": p["day"],
+                     "theme": (p["spots"][0]["area"] if p["spots"] else "市区"),
+                     "items": items})
+
+    # 用最终条目重算一次总额，超了要如实说
+    if limit:
+        real = sum(float(i.get("cost") or 0) for d in plan for i in d["items"])
+        if real > limit:
+            fixes.append("预算 ¥%d 仍压不到 ¥%d 以内（约 ¥%d），建议加预算或减少天数"
+                         % (int(real), limit, int(real)))
+
+    return plan, {"source": "llm+guard", "note": note, "fixes": fixes}

@@ -229,16 +229,20 @@ def create_trip(need, raw_text="", budget_limit=None):
         raise NoCityData(city, db.cities())
     _check_budget(city, days, budget_limit or need.get("budget"), force=need.get("force"))
 
-    plan = plan_agent.plan_days({**need, "days": days}, pois)
-    people = int(need.get("people") or need.get("companions") or 1)
     limit = budget_limit if budget_limit else need.get("budget")
     if isinstance(limit, str):
         limit = None
+    people = int(need.get("people") or need.get("companions") or 1)
+
+    # 让把关逻辑知道预算上限（模型提议后代码要用它裁剪）
+    plan, plan_info = plan_agent.plan_days(
+        {**need, "days": days, "budget_limit": limit}, pois)
 
     tid = db.trip_create(f"{city} · {days} 天行程", city, days, need.get("start_date"),
                          limit, need, raw_text=raw_text, people=people)
     for d in plan:
         db.items_replace_day(tid, d["day"], d["items"])
+    db.trip_set_plan_info(tid, plan_info)
     return tid
 
 
@@ -297,10 +301,13 @@ def spec_payload(tid, with_note=False):
     # 数据口径：这个城市到底收录了多少地点，空白天要据此解释
     pool = db.poi_list(trip["city"])
     trip = dict(trip)
-    trip["data_note"] = (f"{trip['city']} 目前收录 {len(pool)} 个地点"
-                         f"（景点 {sum(1 for p in pool if p['type'] == 'attraction')}"
-                         f" / 餐饮 {sum(1 for p in pool if p['type'] == 'food')}"
-                         f" / 住宿 {sum(1 for p in pool if p['type'] == 'hotel')}）")
+    trip["data_note"] = (
+        f"{trip['city']} 目前收录 {len(pool)} 个地点"
+        f"（景点 {sum(1 for p in pool if p['type'] == 'attraction')}"
+        f" / 餐饮 {sum(1 for p in pool if p['type'] == 'food')}"
+        f" / 住宿 {sum(1 for p in pool if p['type'] == 'hotel')}）"
+    )
+    trip["plan_info"] = db.trip_get_plan_info(tid)
 
     conflicts = validate_agent.validate(items, trip, need)
     tips = tips_agent.make_tips(trip, items)

@@ -225,6 +225,7 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
             "agents": agents or [],
             "adjustments": trip.get("adjust_list") or [],
             "data_note": trip.get("data_note"),
+            "plan": trip.get("plan_info") or {},
         },
     }
 

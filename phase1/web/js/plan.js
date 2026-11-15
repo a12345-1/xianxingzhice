@@ -39,11 +39,37 @@ function render() {
       s.budget_limit ? " / " + yuan(s.budget_limit) : ""}</span>
     <span class="muted">${s.item_count} 个地点</span>`;
 
+  renderPlanNote();
   renderDayNav();
   renderDayHead();
   renderItems();
   renderSide();
   renderBottom();
+}
+
+/* 生成过程说明：模型提议了什么、代码改了什么（答辩时可以直接指给老师看） */
+function renderPlanNote() {
+  const box = document.getElementById("plan-note");
+  if (!box) return;
+  const p = (DATA.meta && DATA.meta.plan) || {};
+  const fixes = p.fixes || [];
+  if (!p.source) { box.innerHTML = ""; return; }
+
+  const modelUsed = p.source === "llm+guard";
+  const head = modelUsed
+    ? `方案由 <b>模型提议</b>，<b>代码校验</b>${fixes.length ? `，修正 ${fixes.length} 处` : "，未发现问题"}`
+    : "方案由本地规则生成（未启用模型）";
+  const note = p.note ? `<div class="muted" style="margin-top:4px">模型思路：${esc(p.note)}</div>` : "";
+  const list = fixes.length
+    ? `<ul class="hint" style="margin:6px 0 0 16px;padding:0">${
+        fixes.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>`
+    : "";
+
+  box.innerHTML = `
+    <div class="card" style="background:#eef5ff;border-left:3px solid #2b4a8b;padding:10px 14px">
+      <div style="font-size:13px">${head}</div>
+      ${note}${list}
+    </div>`;
 }
 
 function currentDay() {

@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS trips (
   code TEXT, raw_text TEXT, people INTEGER DEFAULT 1,
   title TEXT, city TEXT, days INTEGER, start_date TEXT,
   budget_limit REAL, need_json TEXT, status TEXT DEFAULT 'ready',
-  saved_at TEXT, adjustments TEXT, tips_note TEXT
+  saved_at TEXT, adjustments TEXT, tips_note TEXT, plan_info TEXT
 );
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +72,8 @@ def _migrate():
         tcols = {r["name"] for r in c.execute("PRAGMA table_info(trips)").fetchall()}
         for name, ddl in (("code", "TEXT"), ("raw_text", "TEXT"),
                           ("people", "INTEGER DEFAULT 1"), ("saved_at", "TEXT"),
-                          ("adjustments", "TEXT"), ("tips_note", "TEXT")):
+                          ("adjustments", "TEXT"), ("tips_note", "TEXT"),
+                          ("plan_info", "TEXT")):
             if name not in tcols:
                 c.execute(f"ALTER TABLE trips ADD COLUMN {name} {ddl}")
 
@@ -237,6 +238,23 @@ def trip_set_adjustments(tid, items):
 def trip_set_tips_note(tid, note):
     with conn() as c:
         c.execute("UPDATE trips SET tips_note=? WHERE id=?", (note, tid))
+
+
+def trip_set_plan_info(tid, info):
+    with conn() as c:
+        c.execute("UPDATE trips SET plan_info=? WHERE id=?",
+                  (json.dumps(info or {}, ensure_ascii=False), tid))
+
+
+def trip_get_plan_info(tid):
+    with conn() as c:
+        r = c.execute("SELECT plan_info FROM trips WHERE id=?", (tid,)).fetchone()
+    if not r or not r["plan_info"]:
+        return {}
+    try:
+        return json.loads(r["plan_info"])
+    except (TypeError, ValueError):
+        return {}
 
 
 def trip_by_code(code):
