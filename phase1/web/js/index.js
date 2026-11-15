@@ -1,8 +1,9 @@
 /* P1 首页 · 需求输入（按 design/pages/P1 实现） */
 const $ = (id) => document.getElementById(id);
-const state = { days: 3, budget: null, dirtyDays: false };
+const state = { days: 3, budget: null, daysTouched: false, budgetTouched: false };
 
-/* ---------- 解析回显：停止输入 600ms 后出现 ---------- */
+/* ---------- 解析回显：停止输入 600ms 后出现 ----------
+   文本里说清楚的天数/预算会回填到控件上（用户手动改过控件则以控件为准）。 */
 let echoTimer = null;
 function scheduleEcho() {
   clearTimeout(echoTimer);
@@ -10,14 +11,31 @@ function scheduleEcho() {
     const text = $("text").value.trim();
     if (text.length < 2) { $("echo").textContent = ""; return; }
     try {
-      const r = await API.chat(text, {}, { days: state.days, budget: state.budget });
-      const city = r.need && r.need.city;
-      const people = (r.need && r.need.companions) || 1;
-      if (!city || city === "__unknown__") {
-        $("echo").textContent = "还没看出目的地";
-      } else {
-        $("echo").textContent = `${city} · ${people} 人`;
+      const r = await API.chat(text, {}, {
+        days: state.daysTouched ? state.days : null,
+        budget: state.budgetTouched ? state.budget : null,
+      });
+      const need = (r && r.need) || {};
+      const city = need.city;
+      const people = need.companions || 1;
+      const days = need.days;
+      const budget = need.budget;
+
+      if (days && !state.daysTouched) {
+        state.days = Math.max(1, Math.min(15, Number(days)));
+        renderDays();
       }
+      if (typeof budget === "number" && !state.budgetTouched) {
+        state.budget = budget;
+        $("budget").value = budget;
+      }
+
+      const parts = [];
+      if (city && city !== "__unknown__") parts.push(city);
+      parts.push(`${people} 人`);
+      if (state.days) parts.push(`${state.days} 天`);
+      if (state.budget) parts.push(`预算 ¥${state.budget}`);
+      $("echo").textContent = parts.join(" · ");
     } catch (e) { /* 回显失败不打扰用户 */ }
   }, 600);
 }
@@ -49,17 +67,19 @@ function validate() {
 }
 
 /* ---------- 生成 ---------- */
-async function submit(force) {
+async function submit(force, dayOverride) {
   const errs = validate();
   if (errs.length) { $("err").textContent = errs[0]; return; }
 
+  const days = dayOverride || state.days;
   const btn = $("gen");
   btn.disabled = true;
   btn.textContent = "正在规划…";
   $("err").textContent = "";
   $("ask").innerHTML = "";
   try {
-    const trip = await API.generate($("text").value.trim(), state.days, state.budget, null, force);
+    const trip = await API.generate($("text").value.trim(), days, state.budget, null, force,
+                                    state.daysTouched);
     localStorage.setItem("last_trip", trip.trip_id);
     location.href = `/plan.html?trip=${encodeURIComponent(trip.trip_id)}`;
   } catch (e) {
@@ -126,13 +146,27 @@ async function loadRecent() {
 document.addEventListener("DOMContentLoaded", () => {
   renderDays();
   $("text").addEventListener("input", scheduleEcho);
-  $("minus").onclick = () => { state.days = Math.max(1, state.days - 1); renderDays(); };
-  $("plus").onclick = () => { state.days = Math.min(15, state.days + 1); renderDays(); };
+  $("minus").onclick = () => {
+    state.daysTouched = true;
+    state.days = Math.max(1, state.days - 1);
+    renderDays();
+  };
+  $("plus").onclick = () => {
+    state.daysTouched = true;
+    state.days = Math.min(15, state.days + 1);
+    renderDays();
+  };
   $("budget").addEventListener("input", () => {
+    state.budgetTouched = true;
     const v = $("budget").value.trim();
     state.budget = v === "" ? null : Number(v);
   });
-  $("no-limit").onclick = () => { $("budget").value = ""; state.budget = null; $("no-limit").classList.add("on"); };
+  $("no-limit").onclick = () => {
+    state.budgetTouched = true;
+    $("budget").value = "";
+    state.budget = null;
+    $("no-limit").classList.add("on");
+  };
   $("gen").onclick = () => submit(false);
   document.querySelectorAll("#examples button").forEach((b) => {
     b.onclick = () => { $("text").value = b.dataset.fill; scheduleEcho(); };

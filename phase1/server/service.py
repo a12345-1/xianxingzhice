@@ -243,13 +243,18 @@ def create_trip(need, raw_text="", budget_limit=None):
 
 
 # ---------------------------------------------------------------- 生成
-def generate(raw_text, day_count, budget_limit, city=None, force=False):
+def generate(raw_text, day_count, budget_limit, city=None, force=False, days_from_ui=False):
     """跑完整条链，返回（规格化响应, 各智能体耗时）。"""
     timings = []
 
     t = time.perf_counter()
     need = parse_agent.parse_need(raw_text)
-    need["days"] = int(day_count)
+    # 天数：用户没动过步进器时，以文本里写明的天数为准（「5天4晚」不该被界面默认值吃掉）
+    if days_from_ui:
+        need["days"] = int(day_count)
+    else:
+        explicit = parse_agent._explicit(raw_text)
+        need["days"] = int(explicit.get("days") or day_count)
     if city:                                  # 反问流程里用户选的，优先于文本解析
         need["city"] = city
         need["city_unknown"] = False

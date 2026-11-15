@@ -44,11 +44,31 @@ SYSTEM = """你是旅行需求解析器。用户用一句话描述出行计划�
 "interests":[],"avoid":[],"companions":1,"confidence":0.0}"""
 
 
+def _explicit(text: str) -> dict:
+    """文本里**明确写出来**的数字：天、预算、人数。
+
+    模型有时会把「5天4晚」读成 3 天，或者漏掉预算；只要文本里有明确数字，
+    就以文本为准，覆盖模型结果。
+    """
+    out = {}
+    if re.search(r"\d{1,2}\s*(天|晚|日)|[一二两三四五六七八九十]{1,2}\s*(天|晚)", text) \
+            or "周末" in text:
+        out["days"] = _days(text)
+    if re.search(r"预算|(\d{2,5})\s*(元|块)|[一二三四五六七八九十]{1,3}\s*[千百]|\d+\s*[kK]", text):
+        b = _budget(text)
+        if b is not None:
+            out["budget"] = b
+    if re.search(r"\d{1,2}\s*个?人|[一二两三四五]\s*个?人|独自|一个人|一家三口|情侣|闺蜜", text):
+        out["companions"] = _people(text)
+    return out
+
+
 def parse_need(text: str, profile: dict = None) -> dict:
     text = (text or "").strip()
     out = llm.complete_json(SYSTEM, text)
     if out and isinstance(out, dict) and out.get("city") is not None:
         need = _normalize(out, text)
+        need.update(_explicit(text))      # 文本里写明的数字优先
         need["source"] = "llm"
         return need
 
@@ -63,13 +83,13 @@ def _normalize(d: dict, raw: str) -> dict:
         "city": city,
         "city_explicit": any(c in raw for c in CITIES) or city in CITIES,
         "city_unknown": city == UNKNOWN,
-        "days": int(d.get("days") or 2),
+        "days": int(d.get("days") or _days(raw)),
         "start_date": d.get("start_date") or _next_weekend(),
-        "budget": d.get("budget"),
+        "budget": d.get("budget") if d.get("budget") is not None else _budget(raw),
         "pace": d.get("pace") if d.get("pace") in ("slow", "normal", "fast") else "normal",
         "interests": [x for x in (d.get("interests") or []) if x in INTEREST_WORDS][:3],
         "avoid": [x for x in (d.get("avoid") or []) if x in AVOID_WORDS],
-        "companions": int(d.get("companions") or 1),
+        "companions": int(d.get("companions") or _people(raw)),
         "raw": raw,
     }
 
@@ -117,57 +137,94 @@ def _next_weekend() -> str:
     return (today + timedelta(days=delta)).isoformat()
 
 
+CN_NUM = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+          "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12,
+          "十三": 13, "十四": 14, "十五": 15}
+
+
+def _num(s):
+    s = (s or "").strip()
+    if s.isdigit():
+        return int(s)
+    return CN_NUM.get(s)
+
+
+def _days(text: str) -> int:
+    """天数：支持「5天」「五天」「5天4晚」「四晚」「3日游」。"""
+    m = re.search(r"(\d{1,2}|[一二两三四五六七八九十]{1,2})\s*天", text)
+    if m and _num(m.group(1)):
+        return max(1, min(_num(m.group(1)), 15))
+    m = re.search(r"(\d{1,2}|[一二两三四五六七八九十]{1,2})\s*(晚|夜)", text)
+    if m and _num(m.group(1)):           # 只说了几晚：天数 = 晚数 + 1
+        return max(1, min(_num(m.group(1)) + 1, 15))
+    m = re.search(r"(\d{1,2})\s*(日|天)\s*游", text)
+    if m and _num(m.group(1)):
+        return max(1, min(_num(m.group(1)), 15))
+    if "周末" in text:
+        return 2
+    if "小长假" in text:
+        return 3
+    if "一天" in text or "一日" in text:
+        return 1
+    return 2
+
+
+def _budget(text: str):
+    """预算：支持「预算 3000」「预算三千」「三千块」「1.5k」「不贵」。"""
+    m = re.search(r"预算\s*([0-9]{2,5})", text)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"([0-9]{2,5})\s*(元|块|块钱)", text)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"([一二三四五六七八九十]{1,3})\s*(千|百)", text)
+    if m:
+        base = _num(m.group(1)) or 0
+        val = base * (1000 if m.group(2) == "千" else 100)
+        if val >= 100:
+            return val
+    m = re.search(r"(\d+(?:\.\d+)?)\s*[kK]", text)
+    if m:
+        return int(float(m.group(1)) * 1000)
+    if any(w in text for w in ("不贵", "便宜", "省钱", "预算有限")):
+        return "low"
+    return None
+
+
+def _people(text: str) -> int:
+    m = re.search(r"(\d{1,2}|[一二两三四五])\s*个?人", text)
+    if m and _num(m.group(1)):
+        return _num(m.group(1))
+    if "一家三口" in text:
+        return 3
+    if "独自" in text or "一个人" in text or "自己" in text:
+        return 1
+    if any(w in text for w in ("和朋友", "闺蜜", "情侣", "对象", "两个人")):
+        return 2
+    return 1
+
+
 def _heuristic(text: str) -> dict:
     city = _city(text)
     need = {
         "city": city,
         "city_explicit": any(c in text for c in CITIES),
         "city_unknown": city == UNKNOWN,
-        "days": 2,
+        "days": _days(text),
         "start_date": _next_weekend(),
-        "budget": None,
+        "budget": _budget(text),
         "pace": "normal",
         "interests": [],
         "avoid": [],
-        "companions": 1,
+        "companions": _people(text),
         "raw": text,
     }
-
-    # 天数
-    m = re.search(r"([0-9]{1,2}|[一二两三四五六七])\s*天", text)
-    if m:
-        v = m.group(1)
-        need["days"] = int(v) if v.isdigit() else NUM.get(v, 2)
-    elif "周末" in text:
-        need["days"] = 2
-    elif "小长假" in text or "三天" in text:
-        need["days"] = 3
-    elif "一天" in text or "一日" in text:
-        need["days"] = 1
-    need["days"] = max(1, min(need["days"], 5))
-
-    # 预算
-    m = re.search(r"预算\s*([0-9]{2,5})", text)
-    if not m:
-        m = re.search(r"([0-9]{2,5})\s*(元|块)", text)
-    if m:
-        need["budget"] = int(m.group(1))
-    elif any(w in text for w in ("不贵", "便宜", "省钱", "预算有限")):
-        need["budget"] = "low"
 
     # 节奏
     if any(w in text for w in ("慢", "悠闲", "轻松", "躺平", "不赶")):
         need["pace"] = "slow"
     elif any(w in text for w in ("特种兵", "暴走", "紧凑", "多逛", "打卡多")):
         need["pace"] = "fast"
-
-    # 同行人数
-    m = re.search(r"([0-9]{1,2}|[一二两三四五])\s*个?人", text)
-    if m:
-        v = m.group(1)
-        need["companions"] = int(v) if v.isdigit() else NUM.get(v, 1)
-    elif any(w in text for w in ("和朋友", "闺蜜", "情侣", "对象")):
-        need["companions"] = 2
 
     # 兴趣
     for tag, words in INTEREST_WORDS.items():

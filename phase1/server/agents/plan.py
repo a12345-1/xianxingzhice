@@ -102,6 +102,11 @@ def _plan_local(need: dict, pois: list, days: int) -> list:
         area, cands = ranked[(d - 1) % len(ranked)]
         picks = sorted([p for p in cands if p["id"] not in used],
                        key=lambda p: _score(p, need), reverse=True)[:max(n_points, 2)]
+
+        if not picks:
+            out.append({"day": d, "theme": "自由安排", "items": []})
+            continue
+
         area_foods = [p for p in foods if p["area"] == area and p["id"] not in used] or \
                      [p for p in foods if p["id"] not in used]
         # 离当天第一个景点近的餐馆优先，避免午饭安排在 70 分钟车程外
@@ -109,10 +114,6 @@ def _plan_local(need: dict, pois: list, days: int) -> list:
         area_foods = sorted(area_foods, key=lambda p: _km(anchor, p))
         lunch_pool = [p for p in area_foods if open_at(p, 12 * 60)] or area_foods
         dinner_pool = [p for p in area_foods if open_at(p, 18 * 60)]
-
-        if not picks:
-            out.append({"day": d, "theme": "自由安排", "items": []})
-            continue
 
         items, t = [], DAY_START
         t = max(t, earliest(picks[0]))

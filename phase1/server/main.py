@@ -53,6 +53,7 @@ class GenerateIn(BaseModel):
     budget_limit: int | None = None      # 接口文档：int | null
     city: str | None = None              # 反问流程里用户选的城市，优先于文本解析
     force: bool = False                  # 预算不够时仍要生成
+    days_from_ui: bool = False           # 用户手动改过天数控件，此时以控件为准
 
 
 class PatchIn(BaseModel):
@@ -100,7 +101,8 @@ def generate(body: GenerateIn):
     t0 = time.perf_counter()
     try:
         data, timings = service.generate(text, int(body.day_count), body.budget_limit,
-                                         city=(body.city or None), force=bool(body.force))
+                                         city=(body.city or None), force=bool(body.force),
+                                         days_from_ui=bool(body.days_from_ui))
     except service.BudgetTooLow as e:
         per_day = max(1, round(e.need_min / max(e.days, 1)))
         fit_days = max(1, min(e.days - 1, e.budget // per_day)) if e.days > 1 else 0
