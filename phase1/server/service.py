@@ -390,6 +390,37 @@ def apply_patch(tid, item_id, action, patch):
     return False
 
 
+def candidates(tid, item_id, limit=4):
+    """换一个：同城市、同类型、同区域优先，排除已用。"""
+    it = _db_item(tid, item_id)
+    trip = db.trip_get(tid)
+    if not it or not trip:
+        return []
+    used = {x["poi_id"] for x in db.items_get(tid) if x.get("poi_id")}
+    pool = [p for p in db.poi_list(trip["city"])
+            if p["id"] not in used and p["type"] == it["type"]]
+    pool.sort(key=lambda p: (0 if p["area"] == (it.get("area") or "") else 1, p["name"]))
+    return [{
+        "poi_id": p["id"], "name": p["name"], "area": p["area"],
+        "price": int(float(p["price"] or 0)), "stay_min": p["stay_min"],
+        "open_hours": p.get("open_hours"),
+    } for p in pool[:limit]]
+
+
+def replace_item(tid, item_id, poi_id):
+    it = _db_item(tid, item_id)
+    if not it:
+        return None
+    poi = db.poi_by_id(poi_id)
+    if not poi:
+        return None
+    db.item_update(it["id"], {
+        "name": poi["name"], "poi_id": poi["id"], "cost": poi["price"],
+        "duration_min": poi["stay_min"], "area": poi["area"], "tags": poi["tags"],
+    })
+    return {"ok": True, "action": "replace", "message": f"已换成「{poi['name']}」"}
+
+
 # ---------------------------------------------------------------- 详情
 def item_detail(tid, item_id):
     it = _db_item(tid, item_id)

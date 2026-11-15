@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
@@ -7,22 +7,18 @@
   <link rel="stylesheet" href="/css/app.css" />
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
-    <a class="back" href="/">← 新建</a>
-    <div style="flex:1"></div>
-    <div class="sub">已保存的行程</div>
+<div class="shell">
+  <header class="topbar">
+    <a class="back" href="/">‹ 返回</a>
+    <div class="title">我的行程</div>
+    <div class="spacer"></div>
+    <a class="btn sm" href="/">＋ 新建</a>
   </header>
   <div id="list"></div>
+  <p class="muted" id="count"></p>
 </div>
-<nav class="nav-bottom">
-  <a href="/" class=""><i>✎</i>规划</a>
-  <a href="#" id="nav-plan" class=""><i>☰</i>行程</a>
-  <a href="/saved.html" class="on"><i>★</i>我的</a>
-</nav>
 <div class="toast" id="toast"></div>
 <script src="/js/api.js"></script>
 <script src="/js/saved.js"></script>
 </body>
 </html>
-

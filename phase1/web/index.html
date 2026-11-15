@@ -3,59 +3,61 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>闲行智策 · 一句话规划短途旅行</title>
+  <title>闲行智策 · 一句话排好一趟旅行</title>
   <link rel="stylesheet" href="/css/app.css" />
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
-    <div>
-      <h1>闲行智策</h1>
-      <div class="sub">说一句话，生成一份能改的行程</div>
-    </div>
-    <a class="back" href="/saved.html" style="margin-left:auto">我的行程</a>
+<div class="shell">
+  <header class="topbar">
+    <div class="title">闲行智策</div>
+    <div class="spacer"></div>
+    <a class="back" href="/saved.html">我的</a>
   </header>
 
-  <section class="card">
-    <h2>想去哪、玩几天？</h2>
-    <textarea id="text" placeholder="例如：五一 3 天，预算 3000，想去杭州，不想太挤"></textarea>
-    <div class="chips" style="margin:10px 0 14px">
-      <button class="chip" data-fill="这周末去长沙两天，两个人，预算 800，不想爬山">长沙 2 天 · 800</button>
-      <button class="chip" data-fill="下周去杭州玩两天，预算 1000，想看自然风景">杭州 2 天 · 1000</button>
-      <button class="chip" data-fill="去西安两天，预算 1200，想看历史和美食">西安 2 天 · 1200</button>
-      <button class="chip" data-fill="去成都两天，节奏慢一点，预算不限">成都 2 天 · 慢节奏</button>
-    </div>
-    <p class="hint" id="cities"></p>
-
-    <div class="row" style="margin-bottom:12px">
-      <div style="flex:0 0 110px">
-        <label class="field">天数</label>
-        <input id="f-days" type="number" min="1" max="15" value="2" />
+  <div class="p1-grid">
+    <aside class="p1-left">
+      <h2>一句话，排好一趟旅行</h2>
+      <p>说清想去哪、几天、花多少，剩下的交给它。</p>
+      <div class="examples" id="examples">
+        <button data-fill="周末两天，别太赶，想找个安静的古镇">周末两天，带娃，别太累</button>
+        <button data-fill="五天四晚，成都，吃货路线，预算 2000">五天四晚，成都，吃货路线</button>
+        <button data-fill="十一去杭州，情侣，预算 5000，不想太挤">十一，情侣，预算 5000</button>
       </div>
-      <div>
-        <label class="field">预算（元，可留空）</label>
-        <input id="f-budget" type="number" min="0" step="100" placeholder="不限" />
+    </aside>
+
+    <section class="form-col">
+      <h2 style="margin:0 0 10px;font-size:17px">想去哪儿，玩几天？</h2>
+      <textarea id="text" placeholder="周末两天放松一下，别太赶"></textarea>
+      <div class="echo" id="echo"></div>
+
+      <div class="row">
+        <span class="label">玩几天</span>
+        <div class="stepper">
+          <button id="minus" aria-label="减少">－</button>
+          <span class="val" id="days">3</span>
+          <button id="plus" aria-label="增加">＋</button>
+        </div>
       </div>
-    </div>
 
-    <button class="btn" id="btn-gen">生成我的行程</button>
-    <button class="btn ghost" id="btn-clarify" style="margin-top:8px">帮我看看还缺什么</button>
-    <button class="btn ghost" id="btn-refresh" style="margin-top:8px">联网获取该城市地点</button>
-    <div id="ask" style="margin-top:12px"></div>
-    <div id="questions" style="margin-top:10px"></div>
-    <p class="hint" id="hint"></p>
-  </section>
+      <div class="row">
+        <span class="label">预算上限</span>
+        <div class="budget-row">
+          <span class="yen">¥</span>
+          <input id="budget" type="number" min="0" step="100" placeholder="不限" />
+          <button class="chip" id="no-limit">不限</button>
+        </div>
+      </div>
 
-  <p class="hint" style="text-align:center;margin-top:20px">示例原型：POI 与价格用于演示，出行前请核实</p>
+      <button class="btn block" id="gen" style="margin-top:8px">生成我的行程</button>
+      <div class="err" id="err"></div>
+      <div id="ask"></div>
+
+      <div id="recent" style="margin-top:18px"></div>
+    </section>
+  </div>
 </div>
-<nav class="nav-bottom">
-  <a href="/" class="on"><i>✎</i>规划</a>
-  <a href="#" id="nav-plan" class=""><i>☰</i>行程</a>
-  <a href="/saved.html" class=""><i>★</i>我的</a>
-</nav>
 <div class="toast" id="toast"></div>
 <script src="/js/api.js"></script>
 <script src="/js/index.js"></script>
 </body>
 </html>
-

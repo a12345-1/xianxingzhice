@@ -143,7 +143,10 @@ def get_trip(trip_id: str):
 @app.patch("/api/trips/{trip_id}/items/{item_id}")
 def patch_item(trip_id: str, item_id: str, body: PatchIn):
     tid = _trip_id(trip_id)
-    ok = service.apply_patch(tid, item_id, body.action, body.patch or {})
+    if body.action == "replace":
+        ok = service.replace_item(tid, item_id, (body.patch or {}).get("poi_id"))
+    else:
+        ok = service.apply_patch(tid, item_id, body.action, body.patch or {})
     if not ok:
         raise HTTPException(404, detail={"status": "error", "code": "NOT_FOUND",
                                          "message": "这条安排已经不在了"})
@@ -164,8 +167,47 @@ def save_trip(trip_id: str):
 
 
 @app.get("/api/trips")
-def list_trips():
-    return {"trips": db.trips_saved()}
+def list_trips(limit: int = 50):
+    rows = db.trips_recent(limit)
+    out = []
+    for r in rows:
+        out.append({
+            "trip_id": r["code"], "title": r["title"], "city": r["city"],
+            "days": r["days"], "start_date": r["start_date"],
+            "people": r["people"] or 1, "total_cost": int(r["total_cost"] or 0),
+            "budget_limit": r["budget_limit"], "status": r["status"] or "draft",
+            "saved_at": r["saved_at"], "updated_at": r["saved_at"],
+        })
+    return {"trips": out, "total_count": len(out)}
+
+
+@app.post("/api/trips/{trip_id}/duplicate")
+def duplicate_trip(trip_id: str):
+    tid = _trip_id(trip_id)
+    trip = db.trip_get(tid)
+    start = (trip.get("start_date") or "").replace("-", "")
+
+    def _code(new_id):
+        return f"tr_{start}_{new_id:04d}"
+
+    new_id = db.trip_clone(tid, _code)
+    if not new_id:
+        raise HTTPException(404, detail={"status": "error", "code": "NOT_FOUND",
+                                         "message": "复制失败，行程不存在"})
+    return {"trip_id": db.trip_get(new_id)["code"], "status": "draft"}
+
+
+@app.delete("/api/trips/{trip_id}")
+def delete_trip(trip_id: str):
+    tid = _trip_id(trip_id)
+    db.trip_delete(tid)
+    return {"trip_id": trip_id, "status": "deleted"}
+
+
+@app.get("/api/trips/{trip_id}/items/{item_id}/candidates")
+def item_candidates(trip_id: str, item_id: str):
+    tid = _trip_id(trip_id)
+    return {"candidates": service.candidates(tid, item_id)}
 
 
 # ---------------------------------------------------------------- 景点详情

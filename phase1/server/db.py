@@ -240,6 +240,52 @@ def trip_by_code(code):
         return r["id"] if r else None
 
 
+def trips_recent(limit=3):
+    """最近行程（含未保存草稿），带总花费，供 P1「最近行程」用。"""
+    with conn() as c:
+        rows = c.execute(
+            "SELECT t.id, t.code, t.title, t.city, t.days, t.start_date, t.people,"
+            " t.budget_limit, t.status, t.saved_at,"
+            " (SELECT COALESCE(SUM(cost),0) FROM items WHERE trip_id=t.id) AS total_cost"
+            " FROM trips t ORDER BY t.id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def trip_delete(tid):
+    with conn() as c:
+        c.execute("DELETE FROM items WHERE trip_id=?", (tid,))
+        c.execute("DELETE FROM trips WHERE id=?", (tid,))
+
+
+def trip_clone(tid, code):
+    """复制一份行程（含条目），返回新 id。"""
+    with conn() as c:
+        r = c.execute("SELECT * FROM trips WHERE id=?", (tid,)).fetchone()
+        if not r:
+            return None
+        cur = c.execute(
+            "INSERT INTO trips(title,city,days,start_date,budget_limit,need_json,raw_text,"
+            "people,status,adjustments,tips_note) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (r["title"] + "（副本）", r["city"], r["days"], r["start_date"], r["budget_limit"],
+             r["need_json"], r["raw_text"], r["people"], "draft", r["adjustments"],
+             r["tips_note"]),
+        )
+        new_id = cur.lastrowid
+        new_code = code(new_id)
+        c.execute("UPDATE trips SET code=? WHERE id=?", (new_code, new_id))
+        rows = c.execute("SELECT * FROM items WHERE trip_id=? ORDER BY day_index, seq",
+                         (tid,)).fetchall()
+        for it in rows:
+            c.execute(
+                "INSERT INTO items(trip_id,day_index,seq,type,name,start_time,duration_min,"
+                "cost,poi_id,area,tags,note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (new_id, it["day_index"], it["seq"], it["type"], it["name"], it["start_time"],
+                 it["duration_min"], it["cost"], it["poi_id"], it["area"], it["tags"], it["note"]),
+            )
+        return new_id
+
+
 def trip_save(tid, stamp):
     with conn() as c:
         c.execute("UPDATE trips SET status='saved', saved_at=? WHERE id=?", (stamp, tid))
