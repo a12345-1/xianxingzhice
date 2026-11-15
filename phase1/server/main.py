@@ -52,6 +52,7 @@ class GenerateIn(BaseModel):
     day_count: int = 2
     budget_limit: int | None = None      # 接口文档：int | null
     city: str | None = None              # 反问流程里用户选的城市，优先于文本解析
+    force: bool = False                  # 预算不够时仍要生成
 
 
 class PatchIn(BaseModel):
@@ -99,7 +100,21 @@ def generate(body: GenerateIn):
     t0 = time.perf_counter()
     try:
         data, timings = service.generate(text, int(body.day_count), body.budget_limit,
-                                         city=(body.city or None))
+                                         city=(body.city or None), force=bool(body.force))
+    except service.BudgetTooLow as e:
+        per_day = max(1, round(e.need_min / max(e.days, 1)))
+        fit_days = max(1, min(e.days - 1, e.budget // per_day)) if e.days > 1 else 0
+        suggestions = [f"把预算加到 ¥{e.need_min} 以上（当前 ¥{e.budget}）"]
+        if fit_days:
+            suggestions.append(f"把天数减到 {fit_days} 天左右")
+        suggestions.append("换一个周边低成本目的地")
+        raise HTTPException(400, detail={
+            "status": "error", "code": "BUDGET_TOO_LOW",
+            "message": f"预算 ¥{e.budget} 无法满足 {e.city} {e.days} 天的行程"
+                       f"（按最低标准约需 ¥{e.need_min}）",
+            "budget": e.budget, "days": e.days, "minimum": e.need_min,
+            "suggestions": suggestions, "allow_force": True,
+        })
     except service.UnknownCity:
         raise HTTPException(400, detail={
             "status": "error", "code": "UNKNOWN_CITY",

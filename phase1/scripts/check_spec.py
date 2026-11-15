@@ -140,6 +140,21 @@ def main():
     check(r8.status_code == 400, "非法 day_count 返回 400 而不是 422")
     check(r8.json()["code"] == "INVALID_INPUT", "非法参数错误码 INVALID_INPUT")
 
+    # TC-04：预算严重不足要给建议，而不是崩溃或硬生成
+    low = c.post("/api/trips/generate",
+                 json={"raw_text": "去三亚玩5天，预算300，要住海景房", "day_count": 5,
+                       "budget_limit": 300})
+    check(low.status_code == 400, "TC-04 预算不足返回 400")
+    check(low.json()["detail"]["code"] == "BUDGET_TOO_LOW", "错误码 BUDGET_TOO_LOW")
+    check(len(low.json()["detail"].get("suggestions") or []) >= 2, "给了至少 2 条平替建议")
+    check(low.json()["detail"]["minimum"] > 300, "最低估算大于用户预算")
+
+    forced = c.post("/api/trips/generate",
+                    json={"raw_text": "去北京两天", "day_count": 2, "budget_limit": 200,
+                          "force": True})
+    check(forced.status_code == 200, "force=true 时允许强行生成")
+    check(forced.json()["budget"]["over_budget"] is True, "强行生成后标记超支")
+
     # TC-06：模糊输入要反问，不直接生成
     vague = c.post("/api/chat", json={"raw_text": "我想出去玩", "known": {"days": 2}})
     check(vague.status_code == 200, "TC-06 反问接口可用")

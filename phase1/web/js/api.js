@@ -4,23 +4,28 @@ async function request(url, options = {}) {
   const res = await fetch(url, opt);
   if (!res.ok) {
     let msg = `请求失败（${res.status}）`;
+    let detail = null;
     try {
       const body = await res.json();
       const d = body.detail || body;
+      detail = d;
       if (Array.isArray(d)) msg = d.map((x) => x.msg || String(x)).join("；");
       else msg = d.message || d.detail || msg;
     } catch (e) { /* ignore */ }
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    err.detail = detail;
+    throw err;
   }
   return res.json();
 }
 
 const API = {
   health: () => request("/api/health"),
-  generate: (raw_text, day_count, budget_limit, city) =>
+  generate: (raw_text, day_count, budget_limit, city, force) =>
     request("/api/trips/generate", {
       method: "POST",
-      body: JSON.stringify({ raw_text, day_count, budget_limit, city: city || null }),
+      body: JSON.stringify({ raw_text, day_count, budget_limit, city: city || null, force: !!force }),
     }),
   get: (tripId) => request(`/api/trips/${tripId}`),
   patch: (tripId, itemId, action, patch = {}) =>

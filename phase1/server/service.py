@@ -179,6 +179,44 @@ class UnknownCity(Exception):
         super().__init__("unknown city")
 
 
+# 最低可行成本（元）：住宿/晚 + 两顿/天 + 门票交通杂项/天
+MIN_HOTEL = 130
+MIN_MEAL = 45
+MIN_MISC = 40
+
+
+def min_cost(days: int) -> int:
+    days = max(1, int(days))
+    nights = max(days - 1, 0)
+    return int(MIN_HOTEL * nights + MIN_MEAL * 2 * days + MIN_MISC * days)
+
+
+class BudgetTooLow(Exception):
+    """预算低于最低可行线，返回可执行的建议而不是硬生成。"""
+
+    def __init__(self, city, days, budget, need_min):
+        self.city = city
+        self.days = days
+        self.budget = budget
+        self.need_min = need_min
+        super().__init__("budget too low")
+
+
+def _check_budget(city, days, budget, force=False):
+    """预算明显不够时提前拦下（TC-04），force=True 可强行生成。"""
+    if force:
+        return
+    try:
+        budget = int(float(budget))
+    except (TypeError, ValueError):
+        return                      # 没给预算 / “不贵”这种模糊值，交给排程正常判断
+    if budget <= 0:
+        return
+    need_min = min_cost(days)
+    if budget < need_min:
+        raise BudgetTooLow(city, days, budget, need_min)
+
+
 def create_trip(need, raw_text="", budget_limit=None):
     city = need.get("city") or "长沙"
     if city == "__unknown__":
@@ -186,7 +224,10 @@ def create_trip(need, raw_text="", budget_limit=None):
     days = max(1, min(int(need.get("days") or 2), 15))
     pois = db.poi_list(city)
     if not pois:
+        # 没数据时也要先判断预算是否离谱，给的建议才具体
+        _check_budget(city, days, budget_limit or need.get("budget"), force=need.get("force"))
         raise NoCityData(city, db.cities())
+    _check_budget(city, days, budget_limit or need.get("budget"), force=need.get("force"))
 
     plan = plan_agent.plan_days({**need, "days": days}, pois)
     people = int(need.get("people") or need.get("companions") or 1)
@@ -202,7 +243,7 @@ def create_trip(need, raw_text="", budget_limit=None):
 
 
 # ---------------------------------------------------------------- 生成
-def generate(raw_text, day_count, budget_limit, city=None):
+def generate(raw_text, day_count, budget_limit, city=None, force=False):
     """跑完整条链，返回（规格化响应, 各智能体耗时）。"""
     timings = []
 
@@ -215,6 +256,7 @@ def generate(raw_text, day_count, budget_limit, city=None):
         need["city_explicit"] = True
     if budget_limit:
         need["budget"] = budget_limit
+    need["force"] = bool(force)
     timings.append({"name": "需求解析", "status": "ok", "ms": _now_ms(t)})
 
     t = time.perf_counter()

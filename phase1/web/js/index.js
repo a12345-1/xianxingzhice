@@ -72,21 +72,40 @@ function renderAsk(chat) {
   $("ask-cancel").onclick = clearAsk;
 }
 
-async function doGenerate(city, days, budget) {
+async function doGenerate(city, days, budget, force) {
   const { text } = payload();
   const btn = $("btn-gen");
   btn.disabled = true;
   btn.textContent = "正在生成…";
   try {
-    const trip = await API.generate(text, days, budget, city);
+    const trip = await API.generate(text, days, budget, city, force);
     localStorage.setItem("last_trip", trip.trip_id);
     location.href = `/plan.html?trip=${encodeURIComponent(trip.trip_id)}`;
   } catch (e) {
-    toast(e.message);
+    if (e.detail && e.detail.code === "BUDGET_TOO_LOW") {
+      showBudget(e.detail, city, days, budget);
+    } else {
+      toast(e.message);
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = "生成我的行程";
   }
+}
+
+/* TC-04：预算不够时给建议 + 允许强行生成 */
+function showBudget(info, city, days, budget) {
+  const sugg = (info.suggestions || []).map((s) => `<p class="hint">· ${esc(s)}</p>`).join("");
+  $("ask").innerHTML = `
+    <div class="card" style="background:#fff1f0;border-left:3px solid #d44">
+      <h2 style="margin-bottom:6px">预算不够</h2>
+      <p>${esc(info.message)}</p>
+      ${sugg}
+      <button class="btn" id="budget-force" style="margin-top:10px">仍然按 ${"￥" + info.budget} 生成</button>
+      <button class="btn ghost" id="budget-cancel" style="margin-top:8px">我再改改</button>
+    </div>`;
+  $("budget-force").onclick = () => { clearAsk(); doGenerate(city, days, budget, true); };
+  $("budget-cancel").onclick = clearAsk;
 }
 
 async function onGenerate() {
