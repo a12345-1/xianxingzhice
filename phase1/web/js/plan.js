@@ -105,87 +105,97 @@ function renderItems() {
   if (addBtn) addBtn.onclick = openAddPlace;
 }
 
-/* ---------------- 长按拖拽排序（手机/电脑通用，纯 Pointer 事件） ----------------
-   规则：按住 0.5 秒进入拖拽（期间页面仍可滚动）；进入后锁定滚动，
-   按指针位置实时换位，松手时只调一次 PATCH reorder，时间由后端重算。 */
+/* ---------------- 拖拽排序（手柄优先，长按作为补充） ----------------
+   为什么用手柄：触屏上"长按再拖"会先触发布局滚动，往上拖几乎必被 scroll 抢走。
+   手柄上的 touch-action:none 从按下瞬间就禁止滚动，方向不受限；
+   卡片主体长按 0.4s 仍可作为补充入口（先滑动则视为滚动，不进入拖拽）。 */
 const DRAG = { timer: null, active: false, el: null, id: null, from: 0, to: 0, startY: 0, startX: 0 };
 let JUST_DRAGGED = false;
 
+function beginDrag(el, ev, immediate) {
+  DRAG.el = el;
+  DRAG.id = el.dataset.id;
+  DRAG.startY = ev.clientY;
+  DRAG.startX = ev.clientX;
+  DRAG.active = false;
+  DRAG.to = DRAG.from = [...document.querySelectorAll("#items .item")].indexOf(el);
+
+  const activate = () => {
+    DRAG.active = true;
+    el.classList.add("dragging");
+    document.body.classList.add("drag-lock");
+    if (navigator.vibrate) navigator.vibrate(12);
+  };
+  clearTimeout(DRAG.timer);
+  if (immediate) activate();
+  else DRAG.timer = setTimeout(activate, 400);
+}
+
 function bindDrag(el) {
+  const handle = el.querySelector(".drag-handle");
+  if (handle) {
+    handle.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      beginDrag(el, ev, true);
+    });
+  }
   el.addEventListener("contextmenu", (ev) => {
-    if (DRAG.active) ev.preventDefault();   // 长按不要弹系统菜单
+    if (DRAG.active) ev.preventDefault();
   });
   el.addEventListener("pointerdown", (ev) => {
     if (ev.button && ev.button !== 0) return;
-    if (ev.target.closest("button")) return;
-    DRAG.el = el;
-    DRAG.id = el.dataset.id;
-    DRAG.startY = ev.clientY;
-    DRAG.startX = ev.clientX;
-    DRAG.active = false;
-    const box = document.getElementById("items");
-    DRAG.from = [...box.querySelectorAll(".item")].indexOf(el);
-
-    clearTimeout(DRAG.timer);
-    DRAG.timer = setTimeout(() => {
-      DRAG.active = true;
-      el.classList.add("dragging");
-      el.style.touchAction = "none";      // 激活后不再让页面跟着滚
-      document.body.classList.add("drag-lock");
-      if (navigator.vibrate) navigator.vibrate(15);
-      window.getSelection && window.getSelection().removeAllRanges();
-    }, 500);
-
-    const onMove = (e) => {
-      const dy = Math.abs(e.clientY - DRAG.startY);
-      const dx = Math.abs(e.clientX - DRAG.startX);
-      if (!DRAG.active) {
-        if (dy > 8 || dx > 12) cancelDrag();   // 先动就是滚动，不进入拖拽
-        return;
-      }
-      e.preventDefault();
-      placeAt(e.clientY);
-    };
-
-    const onUp = async () => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      clearTimeout(DRAG.timer);
-      if (!DRAG.active) return;
-
-      const moved = DRAG.to !== DRAG.from;
-      el.classList.remove("dragging");
-      el.style.touchAction = "";
-      document.body.classList.remove("drag-lock");
-      DRAG.active = false;
-      if (!moved) return;
-
-      JUST_DRAGGED = true;
-      setTimeout(() => { JUST_DRAGGED = false; }, 350);
-      try {
-        DATA = await API.patch(TRIP_ID, DRAG.id, "reorder", { seq: DRAG.to + 1 });
-        markDirty();
-        render();
-        toast("已挪动，时间已重排");
-      } catch (err) {
-        toast(err.message);
-        render();
-      }
-    };
-
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
-    if (el.setPointerCapture) {
-      try { el.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
-    }
+    if (ev.target.closest("button") || ev.target.closest(".drag-handle")) return;
+    beginDrag(el, ev, false);
   });
 }
 
-function cancelDrag() {
+/* 拖动过程与松手都挂在 document 上，指针跑到卡片外也不会断 */
+document.addEventListener("pointermove", (ev) => {
+  if (!DRAG.el) return;
+  const dy = Math.abs(ev.clientY - DRAG.startY);
+  const dx = Math.abs(ev.clientX - DRAG.startX);
+  if (!DRAG.active) {
+    if (dy > 8 || dx > 12) {          // 先动 = 想滚动，取消
+      clearTimeout(DRAG.timer);
+      DRAG.el = null;
+    }
+    return;
+  }
+  if (ev.cancelable) ev.preventDefault();
+  placeAt(ev.clientY);
+}, { passive: false });
+
+document.addEventListener("touchmove", (ev) => {
+  if (DRAG.active && ev.cancelable) ev.preventDefault();   // 拖拽期间禁止页面滚动
+}, { passive: false });
+
+document.addEventListener("pointerup", endDrag);
+document.addEventListener("pointercancel", endDrag);
+
+async function endDrag() {
   clearTimeout(DRAG.timer);
+  if (!DRAG.el) return;
+  const el = DRAG.el;
+  const moved = DRAG.active && DRAG.to !== DRAG.from;
+  el.classList.remove("dragging");
+  document.body.classList.remove("drag-lock");
+  DRAG.el = null;
+  if (!DRAG.active) { DRAG.active = false; return; }
   DRAG.active = false;
+  if (!moved) { renderItems(); return; }
+
+  JUST_DRAGGED = true;
+  setTimeout(() => { JUST_DRAGGED = false; }, 350);
+  try {
+    DATA = await API.patch(TRIP_ID, DRAG.id, "reorder", { seq: DRAG.to + 1 });
+    markDirty();
+    render();
+    toast("已挪动，时间已重排");
+  } catch (err) {
+    toast(err.message);
+    render();
+  }
 }
 
 function placeAt(y) {
@@ -227,6 +237,7 @@ function itemCard(it) {
   const open = OPEN === it.item_id;
   return `
   <div class="item ${conflict ? "conflict" : ""} ${open ? "open" : ""}" data-id="${esc(it.item_id)}">
+    <span class="drag-handle" title="按住拖动排序" aria-label="拖动排序">⠿</span>
     <div class="time">${esc(it.start_time)}</div>
     <div class="body">
       <div class="name">${esc(it.name)}<span class="type">${TYPE_LABEL[it.type] || it.type}</span></div>

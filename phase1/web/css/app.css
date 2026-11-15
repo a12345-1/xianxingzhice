@@ -305,3 +305,15 @@ body.drag-lock { overflow: hidden; }
 }
 .item.dragging .body { opacity: .95; }
 .item { touch-action: pan-y; }
+
+/* 拖拽手柄：握住就进拖拽，touch-action:none 让页面不会跟着滚 */
+.item { padding-left: 24px; }
+.drag-handle {
+  position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 48px; display: flex; align-items: center; justify-content: center;
+  color: #c2c8d4; font-size: 15px; letter-spacing: -1px; cursor: grab;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.drag-handle:active { cursor: grabbing; color: var(--brand); }
+.item.dragging { opacity: .96; }
+.item .time { padding-left: 4px; }
