@@ -150,6 +150,9 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
                 labels.append("人多")
             if it["type"] == "hotel":
                 labels.append("住宿")
+            src = it.get("source") or "knowledge_base"
+            if src == "user":
+                labels.append("已改")
 
             day_items.append({
                 "item_id": f"it_{it['id']}",
@@ -162,7 +165,7 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
                 "transport": tr,
                 "cost": cost,
                 "cost_breakdown": _breakdown(it, cost),
-                "source": "knowledge_base",
+                "source": "model" if src == "model" else ("user" if src == "user" else "knowledge_base"),
                 "open_hours": it.get("open_hours") or None,
                 "closed_days": _closed_days(it),
                 "warnings": warns,
@@ -248,16 +251,40 @@ def _budget(items, total, limit, people):
 
     suggestions = []
     if over:
-        # 找最贵的一条门票，建议换掉
+        # 规则 1：换掉最贵的收费景点
         spots = [i for i in items if i["type"] == "attraction" and float(i.get("cost") or 0) > 0]
         if spots:
             top = max(spots, key=lambda x: float(x["cost"]))
             suggestions.append({
                 "code": "SWAP_SPOT",
-                "message": f"{top['name']} 可换免费观景点，省 {int(top['cost'])} 元",
+                "message": f"把「{top['name']}」换成免费景点，可省 {int(top['cost'])} 元",
                 "save_amount": int(top["cost"]),
                 "target": {"day_index": top["day_index"], "item_id": f"it_{top['id']}"},
             })
+
+        # 规则 2：降住宿档次（按住宿费的三成估）
+        hotels = [i for i in items if i["type"] == "hotel" and float(i.get("cost") or 0) > 0]
+        if hotels:
+            save = int(sum(float(h.get("cost") or 0) for h in hotels) * 0.3)
+            if save > 0:
+                suggestions.append({
+                    "code": "DOWNGRADE_HOTEL",
+                    "message": f"降到经济型/青旅单间，住宿可省约 {save} 元",
+                    "save_amount": save,
+                    "target": {"day_index": hotels[0]["day_index"], "item_id": f"it_{hotels[0]['id']}"},
+                })
+
+        # 规则 3：少玩一天
+        days = len({i["day_index"] for i in items})
+        if days >= 2 and total:
+            per_day = int(round(total / days))
+            if per_day > 0 and per_day >= (total - lim):
+                suggestions.append({
+                    "code": "CUT_DAY",
+                    "message": f"砍掉一天约省 {per_day} 元（当前 {days} 天）",
+                    "save_amount": per_day,
+                    "target": {"day_index": days, "item_id": None},
+                })
 
     return {
         "limit": lim,

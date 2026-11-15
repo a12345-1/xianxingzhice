@@ -346,6 +346,57 @@ def _renumber(tid, day):
         db.item_update(x["id"], {"seq": i})
 
 
+# 重排后的时间基准：与排程器一致的粗规则（30 分钟机动、午饭不早于 11:45、晚饭不早于 17:30）
+DAY_START = 9 * 60
+BUFFER_MIN = 30
+LUNCH_MIN = 11 * 60 + 45
+DINNER_MIN = 17 * 60 + 30
+
+
+def _retime(tid, day):
+    """按当天顺序重算开始时间（换顺序 / 加地点 / 删地点后都要调）。
+
+    规则：景点和餐饮按顺序累计，餐饮不早于午饭 11:45 / 晚饭 17:30；
+    住宿不参与时间链，固定排在最后一个非住宿条目之后（不早于 19:00）。
+    """
+    rows = sorted([x for x in db.items_get(tid) if x["day_index"] == day],
+                  key=lambda y: y["seq"])
+    t = DAY_START
+    for it in rows:
+        if it["type"] == "hotel":
+            continue
+        dur = int(it["duration_min"] or 0)
+        if it["type"] == "food":
+            t = max(t, LUNCH_MIN if t < 13 * 60 else DINNER_MIN)
+        t = min(t, 23 * 60 + 30)
+        db.item_update(it["id"], {"start_time": f"{t // 60:02d}:{t % 60:02d}"})
+        t += dur + BUFFER_MIN
+
+    for it in rows:
+        if it["type"] == "hotel":
+            ht = max(t, 19 * 60)
+            ht = min(ht, 23 * 60 + 30)
+            db.item_update(it["id"], {"start_time": f"{ht // 60:02d}:{ht % 60:02d}"})
+
+
+def add_item(tid, day, poi_id):
+    """往某天末尾加一个地点（同区域候选），并把当天时间重排。"""
+    trip = db.trip_get(tid)
+    poi = db.poi_by_id(poi_id)
+    if not trip or not poi:
+        return False
+    rows = [x for x in db.items_get(tid) if x["day_index"] == day]
+    if any(x.get("poi_id") == poi_id for x in rows):
+        return False
+    db.item_add(tid, day, {
+        "type": poi["type"], "name": poi["name"], "start": "12:00",
+        "duration_min": poi["stay_min"], "cost": poi["price"], "poi_id": poi["id"],
+        "area": poi["area"], "tags": poi["tags"], "note": "对话新增", "source": "user",
+    })
+    _retime(tid, day)
+    return True
+
+
 # ---------------------------------------------------------------- 编辑
 def apply_patch(tid, item_id, action, patch):
     it = _db_item(tid, item_id)
@@ -353,12 +404,14 @@ def apply_patch(tid, item_id, action, patch):
         return False
 
     if action == "delete":
+        day = it["day_index"]
         db.item_delete(it["id"])
-        _renumber(tid, it["day_index"])
+        _renumber(tid, day)
+        _retime(tid, day)          # 少了一个点，后面的时间往前收
         return True
 
     if action == "update":
-        fields = {}
+        fields = {"source": "user"}
         for k in ("start_time", "duration_min", "cost", "name", "note"):
             if k in patch and patch[k] is not None:
                 fields[k] = patch[k]
@@ -369,10 +422,13 @@ def apply_patch(tid, item_id, action, patch):
         target = int(patch.get("seq") or 1)
         day_rows = sorted([x for x in db.items_get(tid) if x["day_index"] == it["day_index"]],
                           key=lambda y: y["seq"])
+        if it["type"] == "hotel":          # 住宿永远排最后
+            target = len(day_rows)
         cur = next(i for i, x in enumerate(day_rows) if x["id"] == it["id"])
         day_rows.insert(max(1, min(target, len(day_rows))) - 1, day_rows.pop(cur))
         for i, x in enumerate(day_rows, start=1):
             db.item_update(x["id"], {"seq": i})
+        _retime(tid, it["day_index"])      # 顺序变了，时间必须重算
         return True
 
     if action == "insert":
@@ -388,6 +444,28 @@ def apply_patch(tid, item_id, action, patch):
         return True
 
     return False
+
+
+def day_candidates(tid, day, type_="attraction", limit=6):
+    """加一个地点：按天给出同城、指定类型、当天还没用过的候选（同区域优先）。"""
+    trip = db.trip_get(tid)
+    if not trip:
+        return []
+    day_items = [x for x in db.items_get(tid) if x["day_index"] == int(day)]
+    used = {x["poi_id"] for x in db.items_get(tid) if x.get("poi_id")}
+    area = day_items[0].get("area") if day_items else ""
+
+    poolid = [p for p in db.poi_list(trip["city"]) if p["id"] not in used]
+    if type_:
+        want = [p for p in poolid if p["type"] == type_]
+        if want:
+            poolid = want
+    poolid.sort(key=lambda p: (0 if p["area"] == area else 1, p["name"]))
+    return [{
+        "poi_id": p["id"], "name": p["name"], "type": p["type"], "area": p["area"],
+        "price": int(float(p["price"] or 0)), "stay_min": p["stay_min"],
+        "open_hours": p.get("open_hours"),
+    } for p in poolid[:limit]]
 
 
 def candidates(tid, item_id, limit=4):
@@ -417,6 +495,7 @@ def replace_item(tid, item_id, poi_id):
     db.item_update(it["id"], {
         "name": poi["name"], "poi_id": poi["id"], "cost": poi["price"],
         "duration_min": poi["stay_min"], "area": poi["area"], "tags": poi["tags"],
+        "source": "user",
     })
     return {"ok": True, "action": "replace", "message": f"已换成「{poi['name']}」"}
 

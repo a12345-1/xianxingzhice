@@ -86,7 +86,8 @@ function renderItems() {
     box.innerHTML = `<div class="empty">这天还空着</div>`;
     return;
   }
-  box.innerHTML = d.items.map((it) => itemCard(it)).join("");
+  box.innerHTML = d.items.map((it) => itemCard(it)).join("") +
+    `<div class="add-item" id="add-item">＋ 加一个地点</div>`;
   box.querySelectorAll(".item").forEach((el) => {
     const id = el.dataset.id;
     el.querySelector(".body").onclick = (ev) => {
@@ -98,13 +99,26 @@ function renderItems() {
   box.querySelectorAll("[data-act]").forEach((b) => {
     b.onclick = (ev) => { ev.stopPropagation(); onAct(b.dataset.act, b.dataset.id); };
   });
+  const addBtn = box.querySelector("#add-item");
+  if (addBtn) addBtn.onclick = openAddPlace;
+}
+
+function durationText(it) {
+  if (it.type === "hotel") return "住宿";
+  const n = Number(it.duration_min || 0);
+  if (!n) return "即到即走";
+  if (n >= 60) {
+    const h = Math.floor(n / 60), m = n % 60;
+    return m ? `${h} 小时 ${m} 分` : `${h} 小时`;
+  }
+  return `${n} 分钟`;
 }
 
 function itemCard(it) {
   const d = currentDay();
   const conflict = (it.warnings || []).some((w) => w.code !== "INFO");
   const warns = (it.warnings || []).map((w) => esc(w.message)).join("；");
-  const tags = (it.labels || []).map((l) => `<span class="tag">${esc(l)}</span>`).join("");
+  const tags = (it.labels || []).map((l) => `<span class="tag${l === "已改" ? " warn" : ""}">${esc(l)}</span>`).join("");
   const src = it.source === "model" ? `<span class="tag warn">推测</span>` : "";
   const hours = it.open_hours ? "" : `<span class="tag warn">待核实</span>`;
   const tr = it.transport && it.transport.from_prev_min
@@ -116,7 +130,7 @@ function itemCard(it) {
     <div class="time">${esc(it.start_time)}</div>
     <div class="body">
       <div class="name">${esc(it.name)}<span class="type">${TYPE_LABEL[it.type] || it.type}</span></div>
-      <div class="sub">${it.duration_min} 分钟 · ${yuan(it.cost)}${tr ? " · " + tr : ""}</div>
+      <div class="sub">${durationText(it)} · ${yuan(it.cost)}${tr ? " · " + tr : ""}</div>
       ${tags || src || hours ? `<div class="tags">${tags}${src}${hours}</div>` : ""}
       ${warns && conflict ? `<div class="warnline">⚠ ${warns}</div>` : ""}
       <div class="item-actions">
@@ -124,6 +138,12 @@ function itemCard(it) {
         <button class="btn sm ghost" data-act="dur" data-id="${esc(it.item_id)}">调时长</button>
         <button class="btn sm danger" data-act="del" data-id="${esc(it.item_id)}">删除</button>
       </div>
+      ${open && it.type !== "hotel" ? `
+      <div class="dur-edit" data-id="${esc(it.item_id)}">
+        <button data-act="dur-15" data-id="${esc(it.item_id)}">−15 分</button>
+        <span>${durationText(it)}</span>
+        <button data-act="dur+15" data-id="${esc(it.item_id)}">+15 分</button>
+      </div>` : ""}
       <div class="hover-ops">
         <button data-act="up" data-id="${esc(it.item_id)}" title="上移">↑</button>
         <button data-act="down" data-id="${esc(it.item_id)}" title="下移">↓</button>
@@ -178,6 +198,14 @@ async function onAct(act, itemId) {
     if (act === "del") return doDelete(itemId);
     if (act === "dur") return doDuration(itemId);
     if (act === "swap") return openSwap(itemId);
+    if (act === "dur-15" || act === "dur+15") {
+      const d = currentDay();
+      const it = d.items.find((x) => x.item_id === itemId);
+      const n = Math.max(15, Math.min(300, Number(it.duration_min || 0) + (act === "dur+15" ? 15 : -15)));
+      DATA = await API.patch(TRIP_ID, itemId, "update", { duration_min: n });
+      markDirty(); render();
+      return;
+    }
     if (act === "up" || act === "down") {
       const d = currentDay();
       const idx = d.items.findIndex((x) => x.item_id === itemId);
@@ -186,6 +214,55 @@ async function onAct(act, itemId) {
       markDirty(); render();
     }
   } catch (e) { toast(e.message); }
+}
+
+/* 加一个地点：本页抽屉，同区域候选，餐饮/景点切换 */
+async function openAddPlace() {
+  try {
+    const r = await API.addCandidates(TRIP_ID, DAY, "attraction");
+    renderAddDrawer(r.candidates || [], "attraction");
+  } catch (e) { toast(e.message); }
+}
+
+function renderAddDrawer(list, type) {
+  const tabs = `
+    <div class="chips" style="margin-bottom:10px">
+      <button class="chip ${type === "attraction" ? "on" : ""}" data-ptype="attraction">景点</button>
+      <button class="chip ${type === "food" ? "on" : ""}" data-ptype="food">餐饮</button>
+    </div>`;
+  const rows = list.length
+    ? list.map((c) => `
+      <div class="cand" data-poi="${c.poi_id}" style="display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line);cursor:pointer">
+        <span>${esc(c.name)}<br><small class="muted">${esc(c.area || "")} · ${yuan(c.price)} · ${c.stay_min} 分钟</small></span>
+        <span style="color:var(--brand)">加上 ›</span>
+      </div>`).join("")
+    : `<p class="empty">这一带没有可加的地点了</p>`;
+
+  document.getElementById("drawer-body").innerHTML = `
+    <h2>加一个地点</h2>
+    <p class="muted">优先同区域，加完会自动重排当天时间</p>
+    ${tabs}${rows}`;
+  document.getElementById("drawer").classList.add("open");
+
+  document.querySelectorAll("[data-ptype]").forEach((b) => {
+    b.onclick = async () => {
+      const t = b.dataset.ptype;
+      try {
+        const r = await API.addCandidates(TRIP_ID, DAY, t);
+        renderAddDrawer(r.candidates || [], t);
+      } catch (e) { toast(e.message); }
+    };
+  });
+  document.querySelectorAll("[data-poi]").forEach((el) => {
+    el.onclick = async () => {
+      try {
+        DATA = await API.addItem(TRIP_ID, DAY, Number(el.dataset.poi));
+        document.getElementById("drawer").classList.remove("open");
+        markDirty(); render();
+        toast("已加入，时间已重排");
+      } catch (e) { toast(e.message); }
+    };
+  });
 }
 
 function doDelete(itemId) {

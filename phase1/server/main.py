@@ -210,6 +210,28 @@ def item_candidates(trip_id: str, item_id: str):
     return {"candidates": service.candidates(tid, item_id)}
 
 
+class AddItemIn(BaseModel):
+    day_index: int
+    poi_id: int
+
+
+@app.post("/api/trips/{trip_id}/items")
+def add_item(trip_id: str, body: AddItemIn):
+    """加一个地点：同区域候选，加完重排当天时间。"""
+    tid = _trip_id(trip_id)
+    if not service.add_item(tid, int(body.day_index), int(body.poi_id)):
+        raise HTTPException(400, detail={"status": "error", "code": "DUPLICATE_OR_MISSING",
+                                         "message": "这个地点在这天已经存在，或数据不存在"})
+    data = service.spec_payload(tid)
+    return data
+
+
+@app.get("/api/trips/{trip_id}/candidates")
+def day_candidates(trip_id: str, day: int = 1, type: str = "attraction", limit: int = 6):
+    tid = _trip_id(trip_id)
+    return {"candidates": service.day_candidates(tid, day, type, limit)}
+
+
 # ---------------------------------------------------------------- 景点详情
 @app.get("/api/trips/{trip_id}/items/{item_id}")
 def item_detail(trip_id: str, item_id: str):

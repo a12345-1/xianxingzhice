@@ -123,6 +123,7 @@ function renderBudget(el, budget) {
       ${budget.over_budget ? `<p class="hint over">超出 ${yuan(budget.over_amount)}</p>` : ""}
       ${cats}
       ${sug}
+      <p class="hint">门票为参考价，以景区实际票价为准；住宿为参考价位。</p>
     </div>`;
 }
 

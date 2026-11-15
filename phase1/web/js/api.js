@@ -38,6 +38,13 @@ const API = {
   detail: (tripId, itemId) => request(`/api/trips/${tripId}/items/${itemId}`),
   candidates: (tripId, itemId) =>
     request(`/api/trips/${tripId}/items/${itemId}/candidates`),
+  addCandidates: (tripId, day, type) =>
+    request(`/api/trips/${tripId}/candidates?day=${day}&type=${encodeURIComponent(type)}`),
+  addItem: (tripId, day, poiId) =>
+    request(`/api/trips/${tripId}/items`, {
+      method: "POST",
+      body: JSON.stringify({ day_index: day, poi_id: poiId }),
+    }),
   duplicate: (tripId) => request(`/api/trips/${tripId}/duplicate`, { method: "POST" }),
   remove: (tripId) => request(`/api/trips/${tripId}`, { method: "DELETE" }),
   reroute: (tripId, mode, item_id = null, extra_min = 60) =>

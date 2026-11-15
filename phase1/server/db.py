@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS items (
   trip_id INTEGER, day_index INTEGER, seq INTEGER,
   type TEXT, name TEXT, start_time TEXT,
   duration_min INTEGER, cost REAL DEFAULT 0,
-  poi_id INTEGER, area TEXT, tags TEXT, note TEXT
+  poi_id INTEGER, area TEXT, tags TEXT, note TEXT,
+  source TEXT DEFAULT 'knowledge_base'
 );
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY, value TEXT
@@ -74,6 +75,10 @@ def _migrate():
                           ("adjustments", "TEXT"), ("tips_note", "TEXT")):
             if name not in tcols:
                 c.execute(f"ALTER TABLE trips ADD COLUMN {name} {ddl}")
+
+        icols = {r["name"] for r in c.execute("PRAGMA table_info(items)").fetchall()}
+        if "source" not in icols:
+            c.execute("ALTER TABLE items ADD COLUMN source TEXT DEFAULT 'knowledge_base'")
 
 
 # 主数据：马佳杰的《景点价格参考》+ 高德坐标合并生成（scripts/build_poi.py）
@@ -279,9 +284,10 @@ def trip_clone(tid, code):
         for it in rows:
             c.execute(
                 "INSERT INTO items(trip_id,day_index,seq,type,name,start_time,duration_min,"
-                "cost,poi_id,area,tags,note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "cost,poi_id,area,tags,note,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (new_id, it["day_index"], it["seq"], it["type"], it["name"], it["start_time"],
-                 it["duration_min"], it["cost"], it["poi_id"], it["area"], it["tags"], it["note"]),
+                 it["duration_min"], it["cost"], it["poi_id"], it["area"], it["tags"],
+                 it["note"], it["source"]),
             )
         return new_id
 
@@ -320,10 +326,10 @@ def items_replace_day(tid, day, items):
         for i, it in enumerate(items, start=1):
             c.execute(
                 "INSERT INTO items(trip_id,day_index,seq,type,name,start_time,duration_min,"
-                "cost,poi_id,area,tags,note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "cost,poi_id,area,tags,note,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (tid, day, i, it["type"], it["name"], it["start"], it["duration_min"],
                  it.get("cost", 0), it.get("poi_id"), it.get("area", ""),
-                 it.get("tags", ""), it.get("note", "")),
+                 it.get("tags", ""), it.get("note", ""), it.get("source", "knowledge_base")),
             )
 
 
@@ -334,10 +340,10 @@ def item_add(tid, day, it):
                       (tid, day)).fetchone()[0]
         c.execute(
             "INSERT INTO items(trip_id,day_index,seq,type,name,start_time,duration_min,"
-            "cost,poi_id,area,tags,note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "cost,poi_id,area,tags,note,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (tid, day, n + 1, it["type"], it["name"], it["start"], it["duration_min"],
              it.get("cost", 0), it.get("poi_id"), it.get("area", ""),
-             it.get("tags", ""), it.get("note", "")),
+             it.get("tags", ""), it.get("note", ""), it.get("source", "knowledge_base")),
         )
 
 
