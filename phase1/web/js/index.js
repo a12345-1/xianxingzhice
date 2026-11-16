@@ -286,20 +286,53 @@ async function loadAiBadge() {
   }
 }
 
-/* ---------- 最近行程（最多 3 条） ---------- */
+/* ---------- 最近行程（最多 3 条，可删、可看消费明细） ---------- */
 async function loadRecent() {
   try {
     const r = await API.list(3);
     const rows = (r.trips || []).slice(0, 3);
     if (!rows.length) { $("recent").innerHTML = ""; return; }
+
     $("recent").innerHTML = `<h2 style="font-size:13px;color:var(--sub);margin:0 0 8px">最近行程</h2>` +
-      rows.map((t) => `
-        <button class="recent-item" data-id="${esc(t.trip_id)}">
-          <span class="t">${esc(t.title || t.city)} · ${esc((t.start_date || "").slice(5))} 生成</span>
-          <span class="m">${t.total_cost ? "¥" + t.total_cost : ""} ›</span>
-        </button>`).join("");
-    $("recent").querySelectorAll("[data-id]").forEach((b) => {
-      b.onclick = () => { location.href = `/plan.html?trip=${encodeURIComponent(b.dataset.id)}`; };
+      rows.map((t) => {
+        const b = t.breakdown || {};
+        const detail = (b.ticket === undefined) ? "" : `
+          <div class="recent-detail">
+            <span>门票 ¥${b.ticket}</span>
+            <span>餐饮 ¥${b.food}</span>
+            <span>交通 ¥${b.transport}</span>
+            <span>住宿 ¥${b.hotel}</span>
+            <span class="muted">人均 ¥${b.per_person}</span>
+          </div>`;
+        return `
+        <div class="recent-item" data-id="${esc(t.trip_id)}">
+          <div class="recent-main">
+            <span class="t">${esc(t.title || t.city)} · ${esc((t.start_date || "").slice(5))} 生成</span>
+            <span class="m">${t.total_cost ? "¥" + t.total_cost : ""} ›</span>
+            <button class="recent-del" data-del="${esc(t.trip_id)}" title="删除这条记录">删除</button>
+          </div>
+          ${detail}
+        </div>`;
+      }).join("");
+
+    $("recent").querySelectorAll(".recent-item").forEach((el) => {
+      el.onclick = (ev) => {
+        if (ev.target.closest("[data-del]")) return;
+        location.href = `/plan.html?trip=${encodeURIComponent(el.dataset.id)}`;
+      };
+    });
+
+    $("recent").querySelectorAll("[data-del]").forEach((btn) => {
+      btn.onclick = async (ev) => {
+        ev.stopPropagation();
+        const id = btn.dataset.del;
+        if (!window.confirm("删除这条行程记录？删掉就找不回来了")) return;
+        try {
+          await API.remove(id);
+          toast("已删除");
+          loadRecent();
+        } catch (e) { toast(e.message); }
+      };
     });
   } catch (e) { $("recent").innerHTML = ""; }
 }

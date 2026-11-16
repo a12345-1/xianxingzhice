@@ -179,13 +179,29 @@ def list_trips(limit: int = 50):
     rows = db.trips_recent(limit)
     out = []
     for r in rows:
-        out.append({
+        item = {
             "trip_id": r["code"], "title": r["title"], "city": r["city"],
             "days": r["days"], "start_date": r["start_date"],
             "people": r["people"] or 1, "total_cost": int(r["total_cost"] or 0),
             "budget_limit": r["budget_limit"], "status": r["status"] or "draft",
             "saved_at": r["saved_at"], "updated_at": r["saved_at"],
-        })
+        }
+        # 带一份消费明细，列表里能直接展开看钱花在哪
+        try:
+            spec = service.spec_payload(r["id"])
+            if spec:
+                b = spec["budget"]
+                item["total_cost"] = b["total"]
+                item["breakdown"] = {
+                    "ticket": next((c["amount"] for c in b["categories"] if c["key"] == "ticket"), 0),
+                    "food": next((c["amount"] for c in b["categories"] if c["key"] == "food"), 0),
+                    "transport": next((c["amount"] for c in b["categories"] if c["key"] == "transport"), 0),
+                    "hotel": next((c["amount"] for c in b["categories"] if c["key"] == "hotel"), 0),
+                    "per_person": b["per_person"],
+                }
+        except Exception:
+            pass
+        out.append(item)
     return {"trips": out, "total_count": len(out)}
 
 

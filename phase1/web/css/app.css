@@ -339,3 +339,19 @@ body.drag-lock { overflow: hidden; }
 
 /* 到边界时置灰，避免“点了没反应” */
 .hover-ops button:disabled { opacity: .25; cursor: default; }
+
+/* 最近行程：明细 + 删除 */
+.recent-item { display: block; padding: 12px; }
+.recent-main { display: flex; align-items: center; gap: 10px; }
+.recent-main .t { flex: 1; font-weight: 500; }
+.recent-main .m { color: var(--sub); font-size: 13px; }
+.recent-del {
+  border: 1px solid var(--line); background: #fff; color: var(--danger);
+  border-radius: 6px; font-size: 12px; padding: 3px 8px; cursor: pointer;
+}
+.recent-del:hover { border-color: var(--danger); background: #fff1f0; }
+.recent-detail {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px;
+  padding-top: 8px; border-top: 1px dashed var(--line);
+  font-size: 12.5px; color: var(--sub);
+}
