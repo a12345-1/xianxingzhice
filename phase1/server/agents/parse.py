@@ -192,6 +192,16 @@ def _budget(text: str):
 
 
 def _people(text: str) -> int:
+    # “我和一个朋友”=2、“我们三个”=3 这类口语说法先处理
+    m = re.search(r"我们\s*([0-9]|[一二三四五六七八九十])\s*(个|个人)", text)
+    if m:
+        v = int(m.group(1)) if m.group(1).isdigit() else CN_NUM.get(m.group(1))
+        if v:
+            return max(1, v)
+    if re.search(r"我和.{0,4}(朋友|同学|对象|男友|女友|老公|老婆|家人)", text):
+        return 2
+    if "我们" in text and not re.search(r"[0-9一二三四五六七八九十]\s*个?人", text):
+        return 2
     m = re.search(r"(\d{1,2}|[一二两三四五])\s*个?人", text)
     if m and _num(m.group(1)):
         return _num(m.group(1))

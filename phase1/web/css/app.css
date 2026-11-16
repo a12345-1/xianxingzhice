@@ -330,3 +330,12 @@ body.drag-lock { overflow: hidden; }
   font-size: 13px; text-align: right;
 }
 .cost-edit input:focus { outline: none; border-color: var(--brand); }
+
+/* 开始时间编辑 */
+.dur-edit input[type="time"] {
+  border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font-size: 13px;
+}
+.dur-edit input[type="time"]:focus { outline: none; border-color: var(--brand); }
+
+/* 到边界时置灰，避免“点了没反应” */
+.hover-ops button:disabled { opacity: .25; cursor: default; }

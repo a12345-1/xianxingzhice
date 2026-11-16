@@ -131,8 +131,29 @@ function renderItems() {
     };
     bindDrag(el);
   });
+  const cards = [...box.querySelectorAll(".item")];
+  cards.forEach((el, i) => {
+    const up = el.querySelector('[data-act="up"]');
+    const down = el.querySelector('[data-act="down"]');
+    if (up) up.disabled = i === 0;
+    if (down) down.disabled = i === cards.length - 1;
+  });
   box.querySelectorAll("[data-act]").forEach((b) => {
     b.onclick = (ev) => { ev.stopPropagation(); onAct(b.dataset.act, b.dataset.id); };
+  });
+  box.querySelectorAll("[data-time-for]").forEach((inp) => {
+    inp.onclick = (ev) => ev.stopPropagation();
+    inp.onchange = async () => {
+      const id = inp.dataset.timeFor;
+      const v = inp.value;
+      if (!v) return;
+      try {
+        DATA = await API.patch(TRIP_ID, id, "update", { start_time: v });
+        markDirty();
+        render();
+        toast("时间改好了，后面的安排已顺延");
+      } catch (e) { toast(e.message); }
+    };
   });
   box.querySelectorAll("[data-cost-for]").forEach((inp) => {
     inp.onclick = (ev) => ev.stopPropagation();
@@ -308,6 +329,12 @@ function itemCard(it) {
         <button class="btn sm ghost" data-act="dur" data-id="${esc(it.item_id)}">调时长</button>
         <button class="btn sm danger" data-act="del" data-id="${esc(it.item_id)}">删除</button>
       </div>
+      ${open ? `
+      <div class="dur-edit">
+        <span>开始</span>
+        <input type="time" value="${esc(it.start_time)}" data-time-for="${esc(it.item_id)}" />
+        <span class="muted">改完后面几条一起顺延</span>
+      </div>` : ""}
       ${open && it.type !== "hotel" ? `
       <div class="dur-edit" data-id="${esc(it.item_id)}">
         <button data-act="dur-15" data-id="${esc(it.item_id)}">−15 分</button>
@@ -339,18 +366,34 @@ function renderSide() {
   });
   const warnList = [];
   d.items.forEach((it) => (it.warnings || []).forEach((w) => warnList.push(it.name + "：" + w.message)));
-  const pct = b.limit ? Math.min(100, Math.round(b.total / b.limit * 100)) : 0;
+
+  // 当天预算占比：用“日均预算”做分母，条形才是动态的
+  const days = (DATA.days || []).length || 1;
+  const dayLimit = b.limit ? Math.round(b.limit / days) : 0;
+  const dayPct = dayLimit ? Math.min(100, Math.round(d.day_cost / dayLimit * 100)) : 0;
+  const dayOver = dayLimit && d.day_cost > dayLimit;
+  const dayTotal = d.day_cost || 1;
+  const catRow = (label, key) => {
+    const amt = dayCats[key] || 0;
+    const ratio = Math.round(amt / dayTotal * 100);
+    return `<div class="stat"><span>${label}</span><span>${yuan(amt)}${
+      amt ? ` <span class="muted">${ratio}%</span>` : ""}</span></div>`;
+  };
 
   document.getElementById("side").innerHTML = `
     <div class="card">
-      <h2>当天预算 ${yuan(d.day_cost)}</h2>
-      <div class="bar ${b.over_budget ? "warn" : ""}"><i style="width:${pct}%"></i></div>
-      <div class="stat"><span>门票</span><span>${yuan(dayCats.ticket)}</span></div>
-      <div class="stat"><span>餐饮</span><span>${yuan(dayCats.food)}</span></div>
-      <div class="stat"><span>交通</span><span>${yuan(dayCats.transport)}</span></div>
-      <div class="stat"><span>住宿</span><span>${yuan(dayCats.hotel)}</span></div>
+      <h2>当天预算 ${yuan(d.day_cost)}${dayLimit ? `<span class="muted" style="font-size:12px;font-weight:400"> / 日均 ${yuan(dayLimit)}（${dayPct}%）</span>` : ""}</h2>
+      <div class="stacked">${["ticket", "food", "transport", "hotel"].map((k) => {
+        const amt = dayCats[k] || 0;
+        return amt ? `<span title="¥${amt}" style="width:${(amt / (d.day_cost || 1) * 100).toFixed(1)}%;background:${CAT_COLOR[k]}"></span>` : "";
+      }).join("")}</div>
+      ${dayLimit ? `<div class="bar ${dayOver ? "warn" : ""}"><i style="width:${Math.max(dayPct, 2)}%"></i></div>` : ""}
+      ${catRow("门票", "ticket")}
+      ${catRow("餐饮", "food")}
+      ${catRow("交通", "transport")}
+      ${catRow("住宿", "hotel")}
       <div class="stat" style="margin-top:8px"><b>合计</b><b class="${b.over_budget ? "hint over" : ""}">${yuan(b.total)}${
-        b.limit ? " / " + yuan(b.limit) : ""}</b></div>
+        b.limit ? " / " + yuan(b.limit) + `（${Math.round(b.total / b.limit * 100)}%）` : ""}</b></div>
       ${warnList.length ? `<h2 style="margin-top:16px">时间校验</h2>
         <ul class="warn-list">${warnList.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
       <h2 style="margin-top:16px">候选地点</h2>
@@ -388,7 +431,12 @@ async function onAct(act, itemId) {
       const d = currentDay();
       const idx = d.items.findIndex((x) => x.item_id === itemId);
       const target = idx + (act === "up" ? 0 : 2);
-      DATA = await API.patch(TRIP_ID, itemId, "reorder", { seq: target });
+      const res = await API.patch(TRIP_ID, itemId, "reorder", { seq: target });
+      DATA = res;
+      if (res.moved === false) {
+        toast(act === "up" ? "已经是第一个了" : "已经是最后一个了");
+        return;
+      }
       markDirty(); render();
     }
   } catch (e) { toast(e.message); }

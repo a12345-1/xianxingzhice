@@ -55,6 +55,8 @@ class GenerateIn(BaseModel):
     city: str | None = None              # 反问流程里用户选的城市，优先于文本解析
     force: bool = False                  # 预算不够时仍要生成
     days_from_ui: bool = False           # 用户手动改过天数控件，此时以控件为准
+    start_date: str | None = None        # 出发日期 YYYY-MM-DD，空则取下个周六
+    people: int | None = None            # 人数，手动填的优先于文本解析
 
 
 class PatchIn(BaseModel):
@@ -103,7 +105,9 @@ def generate(body: GenerateIn):
     try:
         data, timings = service.generate(text, int(body.day_count), body.budget_limit,
                                          city=(body.city or None), force=bool(body.force),
-                                         days_from_ui=bool(body.days_from_ui))
+                                         days_from_ui=bool(body.days_from_ui),
+                                         start_date=(body.start_date or None),
+                                         people=(body.people or None))
     except service.BudgetTooLow as e:
         per_day = max(1, round(e.need_min / max(e.days, 1)))
         fit_days = max(1, min(e.days - 1, e.budget // per_day)) if e.days > 1 else 0
@@ -155,6 +159,7 @@ def patch_item(trip_id: str, item_id: str, body: PatchIn):
                                          "message": "这条安排已经不在了"})
     data = service.spec_payload(tid)
     data["item"] = service.spec_item(tid, item_id)
+    data["moved"] = ok.get("moved", True) if isinstance(ok, dict) else True
     data["day_cost"] = next((d["day_cost"] for d in data["days"]
                              if any(i["item_id"] == item_id for i in d["items"])), 0)
     return data

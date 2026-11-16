@@ -1,6 +1,6 @@
 ﻿/* P1 首页 · 需求输入（按 design/pages/P1 实现） */
 const $ = (id) => document.getElementById(id);
-const state = { days: null, budget: null, daysTouched: false, budgetTouched: false, city: null, startDate: null };
+const state = { days: null, people: 1, budget: null, daysTouched: false, budgetTouched: false, city: null, startDate: null };
 
 /* ---------- 解析回显：停止输入 600ms 后出现 ----------
    文本里说清楚的天数/预算会回填到控件上（用户手动改过控件则以控件为准）。 */
@@ -38,6 +38,13 @@ function scheduleEcho() {
       $("echo").textContent = parts.join(" · ");
     } catch (e) { /* 回显失败不打扰用户 */ }
   }, 600);
+}
+
+/* ---------- 人数步进器 ---------- */
+function renderPeople() {
+  $("people").textContent = state.people;
+  $("people-minus").disabled = state.people <= 1;
+  $("people-plus").disabled = state.people >= 10;
 }
 
 /* ---------- 天数步进器 ---------- */
@@ -95,7 +102,7 @@ async function submit(force, dayOverride, answers) {
   $("ask").innerHTML = "";
   try {
     const trip = await API.generate(text, days, budget, city || state.city, force,
-                                    state.daysTouched || !!answers, state.startDate);
+                                    state.daysTouched || !!answers, state.startDate, state.people);
     localStorage.setItem("last_trip", trip.trip_id);
     location.href = `/plan.html?trip=${encodeURIComponent(trip.trip_id)}`;
   } catch (e) {
@@ -214,6 +221,11 @@ async function smartFill() {
       paintCities();
       filled.push(need.city);
     }
+    if (need.companions) {
+      state.people = Math.max(1, Math.min(10, Number(need.companions)));
+      renderPeople();
+      filled.push(state.people + " 人");
+    }
     if (need.days) {
       state.days = Math.max(1, Math.min(15, Number(need.days)));
       renderDays();
@@ -319,6 +331,9 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   $("gen").onclick = () => submit(false);
   $("btn-smart").onclick = smartFill;
+  $("people-minus").onclick = () => { state.people = Math.max(1, state.people - 1); renderPeople(); };
+  $("people-plus").onclick = () => { state.people = Math.min(10, state.people + 1); renderPeople(); };
+  renderPeople();
   const today = new Date().toISOString().slice(0, 10);
   $("start-date").min = today;
   $("start-date").onchange = () => { state.startDate = $("start-date").value || null; };

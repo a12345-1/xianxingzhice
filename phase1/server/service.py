@@ -15,6 +15,21 @@ def _now_ms(t0):
     return int((time.perf_counter() - t0) * 1000)
 
 
+def _hhmm_min(s):
+    """'09:30' -> 570；解析失败返回 None。"""
+    try:
+        h, m = str(s).split(":")
+        v = int(h) * 60 + int(m)
+        return v if 0 <= v < 24 * 60 else None
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _min_hhmm(v):
+    v = max(0, min(int(v), 23 * 60 + 59))
+    return "%02d:%02d" % (v // 60, v % 60)
+
+
 def _enrich(items):
     """补 POI 元数据（营业时间、坐标、标签），供校验与规格化使用。"""
     cache = {}
@@ -248,7 +263,7 @@ def create_trip(need, raw_text="", budget_limit=None):
 
 # ---------------------------------------------------------------- 生成
 def generate(raw_text, day_count, budget_limit, city=None, force=False,
-             days_from_ui=False, start_date=None):
+             days_from_ui=False, start_date=None, people=None):
     """跑完整条链，返回（规格化响应, 各智能体耗时）。"""
     timings = []
 
@@ -268,6 +283,9 @@ def generate(raw_text, day_count, budget_limit, city=None, force=False,
         need["budget"] = budget_limit
     if start_date:
         need["start_date"] = start_date
+    if people:
+        need["companions"] = int(people)
+        need["people"] = int(people)
     need["force"] = bool(force)
     timings.append({"name": "需求解析", "status": "ok", "ms": _now_ms(t)})
 
@@ -439,6 +457,19 @@ def apply_patch(tid, item_id, action, patch):
         for k in ("start_time", "duration_min", "cost", "name", "note"):
             if k in patch and patch[k] is not None:
                 fields[k] = patch[k]
+
+        # 手改时间：把后面几条一起顺延，不要改完又被重算覆盖
+        if "start_time" in fields:
+            old_m = _hhmm_min(it.get("start_time"))
+            new_m = _hhmm_min(fields["start_time"])
+            if old_m is not None and new_m is not None and new_m != old_m:
+                delta = new_m - old_m
+                for x in sorted([y for y in db.items_get(tid)
+                                 if y["day_index"] == it["day_index"] and y["seq"] > it["seq"]],
+                                key=lambda y: y["seq"]):
+                    m = _hhmm_min(x.get("start_time"))
+                    if m is not None:
+                        db.item_update(x["id"], {"start_time": _min_hhmm(m + delta)})
         db.item_update(it["id"], fields)
         return True
 
@@ -446,14 +477,14 @@ def apply_patch(tid, item_id, action, patch):
         target = int(patch.get("seq") or 1)
         day_rows = sorted([x for x in db.items_get(tid) if x["day_index"] == it["day_index"]],
                           key=lambda y: y["seq"])
-        if it["type"] == "hotel":          # 住宿永远排最后
-            target = len(day_rows)
+        target = max(1, min(target, len(day_rows)))
         cur = next(i for i, x in enumerate(day_rows) if x["id"] == it["id"])
-        day_rows.insert(max(1, min(target, len(day_rows))) - 1, day_rows.pop(cur))
+        if target - 1 != cur:
+            day_rows.insert(target - 1, day_rows.pop(cur))
         for i, x in enumerate(day_rows, start=1):
             db.item_update(x["id"], {"seq": i})
         _retime(tid, it["day_index"])      # 顺序变了，时间必须重算
-        return True
+        return {"ok": True, "moved": target - 1 != cur}
 
     if action == "insert":
         new = patch.get("item") or {}
