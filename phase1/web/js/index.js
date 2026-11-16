@@ -1,6 +1,6 @@
 ﻿/* P1 首页 · 需求输入（按 design/pages/P1 实现） */
 const $ = (id) => document.getElementById(id);
-const state = { days: null, people: 1, budget: null, daysTouched: false, budgetTouched: false, city: null, startDate: null };
+const state = { days: null, people: null, budget: null, daysTouched: false, budgetTouched: false, city: null, startDate: null };
 
 /* ---------- 解析回显：停止输入 600ms 后出现 ----------
    文本里说清楚的天数/预算会回填到控件上（用户手动改过控件则以控件为准）。 */
@@ -30,6 +30,14 @@ function scheduleEcho() {
         $("budget").value = budget;
       }
 
+      // 4 项都齐了就不用再点“智能识别”
+      const complete = (city && city !== "__unknown__") && state.days && state.people && (state.budgetTouched || state.budget);
+      if (complete) {
+        $("btn-smart").style.display = "none";
+      } else {
+        $("btn-smart").style.display = "";
+      }
+
       const parts = [];
       if (city && city !== "__unknown__") parts.push(city);
       parts.push(`${people} 人`);
@@ -42,9 +50,9 @@ function scheduleEcho() {
 
 /* ---------- 人数步进器 ---------- */
 function renderPeople() {
-  $("people").textContent = state.people;
-  $("people-minus").disabled = state.people <= 1;
-  $("people-plus").disabled = state.people >= 10;
+  $("people").textContent = state.people == null ? "—" : state.people;
+  $("people-minus").disabled = state.people == null || state.people <= 1;
+  $("people-plus").disabled = state.people != null && state.people >= 10;
 }
 
 /* ---------- 天数步进器 ---------- */
@@ -65,8 +73,7 @@ function validate() {
     $("text").classList.add("invalid");
     errs.push("多说一句，比如想去哪、玩几天");
   }
-  if (state.days == null) errs.push("先说说玩几天，或用「智能识别」自动填");
-  else if (state.days < 1 || state.days > 15) errs.push("天数填 1–15 天");
+  else if (state.days != null && (state.days < 1 || state.days > 15)) errs.push("天数填 1–15 天");
   if (state.budget !== null && state.budget > 0 && state.budget < 100) {
     $("budget").classList.add("invalid");
     errs.push("预算至少 100 元，或选不限");
@@ -76,6 +83,20 @@ function validate() {
 
 /* ---------- 生成 ---------- */
 async function submit(force, dayOverride, answers) {
+  // 反问卡带回来的答案先写进状态，再校验
+  if (answers) {
+    if (answers.people) state.people = Number(answers.people);
+    if (answers.days) { state.days = Number(answers.days); state.daysTouched = true; }
+    if (answers.budget !== undefined && answers.budget !== null) {
+      state.budget = Number(answers.budget);
+      state.budgetTouched = true;
+      $("budget").value = answers.budget;
+    }
+    if (answers.city) { state.city = answers.city; paintCities(); }
+    renderDays();
+    renderPeople();
+  }
+
   const errs = validate();
   if (errs.length) { $("err").textContent = errs[0]; return; }
 
@@ -87,12 +108,22 @@ async function submit(force, dayOverride, answers) {
       const chat = await API.chat(text, {}, {
         days: state.daysTouched ? state.days : null,
         budget: state.budgetTouched ? state.budget : null,
+        people: state.people,
       });
       if (!chat.ready) { renderAsk(chat); return; }
+      // 信息齐了：把解析到的人数和天数回填到控件，保证显示与实际一致
+      const nd = chat.need || {};
+      if (nd.companions) { state.people = Math.max(1, Math.min(10, Number(nd.companions))); renderPeople(); }
+      if (nd.days && !state.daysTouched) { state.days = Math.max(1, Math.min(15, Number(nd.days))); renderDays(); }
+      if (typeof nd.budget === "number" && !state.budgetTouched) {
+        state.budget = nd.budget;
+        $("budget").value = nd.budget;
+      }
     } catch (e) { /* 检测失败就继续生成，交给后端兜底 */ }
   }
 
   const days = (answers && answers.days) || dayOverride || state.days;
+  const people = (answers && answers.people) || state.people || 1;
   const budget = answers ? answers.budget : state.budget;
   const city = answers ? answers.city : null;
   const btn = $("gen");
@@ -102,7 +133,7 @@ async function submit(force, dayOverride, answers) {
   $("ask").innerHTML = "";
   try {
     const trip = await API.generate(text, days, budget, city || state.city, force,
-                                    state.daysTouched || !!answers, state.startDate, state.people);
+                                    state.daysTouched || !!answers, state.startDate, people);
     localStorage.setItem("last_trip", trip.trip_id);
     location.href = `/plan.html?trip=${encodeURIComponent(trip.trip_id)}`;
   } catch (e) {
@@ -136,6 +167,12 @@ function renderAsk(chat) {
         }</div>
       </div>`;
     }
+    if (q.slot === "people") {
+      return `<div class="ask-row" data-slot="people">
+        <label class="field">${esc(q.question)} ${msg}</label>
+        <input type="number" min="1" max="10" value="${state.people || ""}" placeholder="几个人" />
+      </div>`;
+    }
     if (q.slot === "days") {
       return `<div class="ask-row" data-slot="days">
         <label class="field">${esc(q.question)}</label>
@@ -156,6 +193,8 @@ function renderAsk(chat) {
       <button class="btn ghost block" id="ask-cancel" style="margin-top:8px">算了，我重新说</button>
     </div>`;
 
+  highlightMissing(qs.map((q) => q.slot));
+
   $("ask").querySelectorAll("[data-city]").forEach((b) => {
     b.onclick = () => {
       $("ask").querySelectorAll("[data-city]").forEach((x) => x.classList.remove("on"));
@@ -168,10 +207,14 @@ function renderAsk(chat) {
     const picked = $("ask").querySelector("[data-city].on");
     const city = picked ? picked.dataset.city : null;
     if (qs.some((q) => q.slot === "city") && !city) return toast("先选一个城市");
+    const peopleEl = $("ask").querySelector('[data-slot="people"] input');
+    const people = peopleEl ? (Number(peopleEl.value) || state.people) : state.people;
+    if (!people) return toast("请先填几个人");
     const daysEl = $("ask").querySelector('[data-slot="days"] input');
     const budgetEl = $("ask").querySelector('[data-slot="budget"] input');
     const answers = {
       city: city,
+      people: people,
       days: daysEl ? Number(daysEl.value) || state.days : state.days,
       budget: budgetEl && budgetEl.value ? Number(budgetEl.value) : null,
     };
@@ -184,6 +227,8 @@ function showCityAsk(cities, message) {
   $("ask").innerHTML = `<div class="chips" style="margin-top:8px">${
     cities.map((c) => `<button class="chip" data-city="${esc(c)}">${esc(c)}</button>`).join("")
   }</div>`;
+  highlightMissing(qs.map((q) => q.slot));
+
   $("ask").querySelectorAll("[data-city]").forEach((b) => {
     b.onclick = () => {
       $("text").value = `去${b.dataset.city}${$("text").value.replace(/^去[^\u4e00-\u9fff]*/, "")}`;
@@ -286,6 +331,26 @@ async function loadAiBadge() {
   }
 }
 
+/* 把缺的那几项在表单里高亮出来，用户一眼看到该填哪 */
+function highlightMissing(slots) {
+  const map = {
+    city: "city-chips",
+    days: "days",
+    people: "people",
+    budget: "budget",
+  };
+  document.querySelectorAll(".row.needs").forEach((el) => el.classList.remove("needs"));
+  slots.forEach((slot) => {
+    const id = map[slot];
+    const el = id && document.getElementById(id);
+    if (!el) return;
+    const row = el.closest(".row") || el.parentElement;
+    if (row) row.classList.add("needs");
+  });
+  // 输入框加红边
+  document.querySelectorAll(".needs input, .needs .stepper").forEach((el) => el.classList.add("needs-box"));
+}
+
 /* ---------- 最近行程（最多 3 条，可删、可看消费明细） ---------- */
 async function loadRecent() {
   try {
@@ -372,9 +437,16 @@ document.addEventListener("DOMContentLoaded", () => {
   $("start-date").onchange = () => { state.startDate = $("start-date").value || null; };
   loadCities();
   loadAiBadge();
+  // 演示：/ ?demo=ask 直接走一遍"缺信息 → 反问"
+  if (new URLSearchParams(location.search).get('demo') === 'ask') {
+    $("text").value = "我想出去玩";
+    setTimeout(() => submit(false), 600);
+  }
   document.querySelectorAll("#examples button").forEach((b) => {
     b.onclick = () => { $("text").value = b.dataset.fill; scheduleEcho(); };
   });
   loadRecent();
 });
+
+
 

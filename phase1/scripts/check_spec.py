@@ -163,8 +163,11 @@ def main():
     check({"city", "budget"} <= set(v["missing"]), "缺 city 和 budget 会被问")
     check(all(q.get("slot") for q in v["questions"]), "反问项都带 slot")
 
-    full = c.post("/api/chat", json={"raw_text": "去杭州两天，预算 1000"}).json()
+    full = c.post("/api/chat", json={"raw_text": "去杭州两天，预算 1000，两个人"}).json()
     check(full["ready"] is True and not full["missing"], "信息齐全时不再反问")
+
+    no_people = c.post("/api/chat", json={"raw_text": "去杭州两天，预算 1000"}).json()
+    check("people" in no_people["missing"], "没说几个人会反问人数")
 
     unknown = c.post("/api/chat", json={"raw_text": "霍格沃茨2天"}).json()
     check("city" in unknown["missing"], "不认识的城市也会触发反问")

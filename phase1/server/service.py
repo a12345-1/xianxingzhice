@@ -641,15 +641,19 @@ def reroute(tid, mode, item_id=None, extra_min=60):
 # ---------------------------------------------------------------- 多轮补槽
 SLOT_QUESTIONS = {
     "city": {
-        "question": "想去哪个城市？",
+        "question": "请问想去哪个城市？",
         "hint": "直接选一个，或在输入框里写明城市",
     },
     "days": {
-        "question": "玩几天？",
+        "question": "请问打算玩几天？",
         "hint": "1—15 天，周末一般 2 天",
     },
+    "people": {
+        "question": "请问一共几个人去？",
+        "hint": "1—10 人，门票餐饮按人数算、住宿按房间算",
+    },
     "budget": {
-        "question": "大概多少预算？（可以留空表示不限）",
+        "question": "请问您的预算大概是多少？（可以留空表示不限）",
         "hint": "含吃住行的打包总预算，单位元",
     },
 }
@@ -674,6 +678,13 @@ def clarify(raw_text, answers=None, known=None):
         if extra:
             q["message"] = extra
         questions.append(q)
+
+    # 人数：文本没写、用户也没填，就要问
+    if not known.get("people") and not answers.get("people"):
+        ppl = need.get("companions") or 0
+        m_ppl = re.search(r"[0-9一二三四五六七八九十两]\s*个?人|独自|一个人|情侣|闺蜜|一家三口|我和", text)
+        if not m_ppl and int(ppl) <= 1:
+            ask("people", "从输入里没看出几个人去")
 
     # 城市
     city = need.get("city")
