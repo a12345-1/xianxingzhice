@@ -22,12 +22,13 @@ async function request(url, options = {}) {
 
 const API = {
   health: () => request("/api/health"),
-  generate: (raw_text, day_count, budget_limit, city, force, daysFromUi) =>
+  generate: (raw_text, day_count, budget_limit, city, force, daysFromUi, startDate) =>
     request("/api/trips/generate", {
       method: "POST",
       body: JSON.stringify({
         raw_text, day_count, budget_limit,
         city: city || null, force: !!force, days_from_ui: !!daysFromUi,
+        start_date: startDate || null,
       }),
     }),
   get: (tripId) => request(`/api/trips/${tripId}`),

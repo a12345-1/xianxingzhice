@@ -60,6 +60,23 @@ def _transport(prev, cur):
     return {"mode": mode, "from_prev_min": max(minutes, 5 if mode != "walk" else 0)}
 
 
+# 交通费估算（元）：不接实时打车接口，按城市常见的计价方式粗算
+FARE_BASE = {"walk": 0.0, "bus": 2.0, "taxi": 13.0}
+FARE_PER_KM = {"walk": 0.0, "bus": 1.0, "taxi": 2.6}
+
+
+def _fare(prev, cur, tr):
+    """一段路的交通费：公交按票价，打车按“起步价 + 里程”。"""
+    if not prev:
+        return 0
+    mode = tr.get("mode", "walk")
+    if mode == "walk":
+        return 0
+    km = _haversine_km((prev.get("lat"), prev.get("lng")), (cur.get("lat"), cur.get("lng"))) or 0
+    km = km * 1.35           # 直线距离折算实际路网里程
+    return int(round(FARE_BASE.get(mode, 0) + FARE_PER_KM.get(mode, 0) * km))
+
+
 def _breakdown(item, cost):
     if item["type"] == "food":
         return {"ticket": 0, "food": cost, "transport": 0, "hotel": 0}
@@ -85,17 +102,21 @@ def _walk_level(items):
     return "heavy"
 
 
-def _day_weather(start_date, day_index):
+def _day_weather(start_date, day_index, city=""):
+    """逐日天气：从模板里按 城市+日期+天序号 抽一个（同一天稳定、不同天不同）。"""
+    from .agents import weather as weather_agent
+
     if not start_date:
         return None
     d = date.fromisoformat(start_date) + timedelta(days=day_index - 1)
-    w = weather_of(d.month)
+    tpl = weather_agent.pick(f"{city}-{d.isoformat()}", day_index)
     return {
-        "condition": w["text"],
-        "temp_low": w["low"],
-        "temp_high": w["high"],
-        "rain_prob": w["rain"],
-        "source": "model",          # 未接真实天气接口，如实标注
+        "condition": tpl["text"],
+        "temp_low": tpl["low"],
+        "temp_high": tpl["high"],
+        "rain_prob": tpl["rain"],
+        "indoor_hint": tpl["indoor"],
+        "source": "template",       # 未接真实天气接口，如实标注
     }
 
 
@@ -121,11 +142,12 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
     total = 0
     for d in range(1, days_n + 1):
         lst = by_day.get(d, [])
-        weather = _day_weather(start, d)
+        weather = _day_weather(start, d, trip.get("city") or "")
         day_items, prev, day_cost = [], None, 0
         for idx, it in enumerate(lst, start=1):
             cost = int(round(float(it.get("cost") or 0)))
             tr = _transport(prev, it)
+            fare = _fare(prev, it, tr)          # 这一段路的交通费（估算）
             start_min = _hhmm_to_min(it.get("start_time"))
             end_min = start_min + int(it.get("duration_min") or 0)
 
@@ -154,6 +176,10 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
             if src == "user":
                 labels.append("已改")
 
+            bd = _breakdown(it, cost)
+            bd["transport"] = bd.get("transport", 0) + fare
+            total_cost = cost + fare
+
             day_items.append({
                 "item_id": f"it_{it['id']}",
                 "seq": idx,
@@ -162,17 +188,17 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
                 "start_time": _min_to_hhmm(start_min),
                 "end_time": _min_to_hhmm(end_min),
                 "duration_min": int(it.get("duration_min") or 0),
-                "transport": tr,
-                "cost": cost,
-                "cost_breakdown": _breakdown(it, cost),
+                "transport": {**tr, "fare": fare},
+                "cost": total_cost,
+                "cost_breakdown": bd,
                 "source": "model" if src == "model" else ("user" if src == "user" else "knowledge_base"),
                 "open_hours": it.get("open_hours") or None,
                 "closed_days": _closed_days(it),
                 "warnings": warns,
                 "labels": labels,
             })
-            day_cost += cost
-            total += cost
+            day_cost += total_cost
+            total += total_cost
             prev = it
 
         days.append({
@@ -190,7 +216,9 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
             ),
         })
 
-    budget = _budget(items, total, trip.get("budget_limit"), people)
+    fare_total = sum(int(i["transport"].get("fare") or 0)
+                     for d in days for i in d["items"])
+    budget = _budget(items, total, trip.get("budget_limit"), people, fare_total)
     tips_obj = _tips(trip, days, items, tips)
 
     return {
@@ -230,8 +258,8 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
     }
 
 
-def _budget(items, total, limit, people):
-    amounts = {"ticket": 0, "transport": 0, "food": 0, "hotel": 0}
+def _budget(items, total, limit, people, fare_total=0):
+    amounts = {"ticket": 0, "transport": int(fare_total or 0), "food": 0, "hotel": 0}
     for it in items:
         cost = int(round(float(it.get("cost") or 0)))
         key = {"food": "food", "hotel": "hotel", "transport": "transport"}.get(it["type"], "ticket")
@@ -324,6 +352,8 @@ def _tips(trip, days, items, tips):
         msg = f"{w['condition']} {w['temp_low']}—{w['temp_high']}℃"
         if actions:
             msg += "，" + "、".join(actions)
+        if w.get("indoor_hint"):
+            msg += "；建议减少室外活动，优先室内场馆"
         weather_tips.append({
             "day_index": d["day_index"], "date": d["date"], "level": level,
             "condition": w["condition"], "message": msg, "actions": actions,

@@ -175,6 +175,20 @@ def _plan_local(need: dict, pois: list, days: int) -> list:
     return out
 
 
+def _weather_for(need, day):
+    """取某一天的天气模板（用于“下雨减少室外活动”这类约束）。"""
+    from datetime import date, timedelta
+    from . import weather
+    start = need.get("start_date")
+    if not start:
+        return None
+    try:
+        d = date.fromisoformat(start) + timedelta(days=int(day) - 1)
+    except (TypeError, ValueError):
+        return None
+    return weather.pick("%s-%s" % (need.get("city"), d.isoformat()), day)
+
+
 def _km(a, b):
     """两点直线距离（公里），用于给酒店排序。"""
     import math
@@ -272,17 +286,53 @@ def _plan_guarded(need: dict, pois: list, days: int):
             hotel = h
             used.add(h["id"])
 
+        # 住宿别选太远的：离最后一个景点超过 15 公里就换最近的
+        if hotel and spots:
+            far = _km(spots[-1], hotel)
+            if far > MAX_HOP_KM:
+                closer = [x for x in cand if x["type"] == "hotel" and x["id"] != hotel["id"]]
+                closer.sort(key=lambda x: _km(spots[-1], x))
+                if closer and _km(spots[-1], closer[0]) < far:
+                    fixes.append("住宿「%s」离当天最后一个点约 %.0f 公里，换成「%s」"
+                                 % (hotel["name"], far, closer[0]["name"]))
+                    used.discard(hotel["id"])
+                    hotel = closer[0]
+                    used.add(hotel["id"])
+
         picked.append({"day": idx, "spots": spots, "foods": foods, "hotel": hotel})
 
-    # 补足：每天至少 2 个景点
+    # 天气约束：下雨/高温这类模板下，减少室外活动（优先室内，最多留 1 个室外）
+    from . import weather as weather_agent
     for p in picked:
+        tpl = _weather_for(need, p["day"])
+        p["weather"] = tpl
+        if not tpl or not tpl.get("indoor"):
+            continue
+        indoor = [x for x in p["spots"] if weather_agent.is_indoor(x)]
+        outdoor = [x for x in p["spots"] if not weather_agent.is_indoor(x)]
+        if outdoor and len(outdoor) > 1:
+            keep = outdoor[0]
+            dropped = outdoor[1:]
+            for x in dropped:
+                p["spots"].remove(x)
+                used.discard(x["id"])
+            fixes.append("第 %d 天%s（降雨 %d%%），减少室外活动，去掉「%s」"
+                         % (p["day"], tpl["text"], tpl["rain"],
+                            "」「".join(x["name"] for x in dropped)))
+
+    # 补足：每天至少 2 个景点（下雨天只补室内的，宁可不补也不违背天气约束）
+    for p in picked:
+        tpl = p.get("weather") or {}
         pool = [x for x in cand if x["type"] == "attraction" and x["id"] not in used]
+        if tpl.get("indoor"):
+            pool = [x for x in pool if weather_agent.is_indoor(x)]
         pool.sort(key=lambda x: _score(x, need), reverse=True)
         while len(p["spots"]) < 2 and pool:
             extra = pool.pop(0)
             p["spots"].append(extra)
             used.add(extra["id"])
-            fixes.append("第 %d 天景点不足，补了「%s」" % (p["day"], extra["name"]))
+            why = "景点不足" if not tpl.get("indoor") else "下雨，补一个室内点"
+            fixes.append("第 %d 天%s，补了「%s」" % (p["day"], why, extra["name"]))
 
     # 距离：同一天相邻两点太远就换近的，换不到就删
     for p in picked:

@@ -1,6 +1,6 @@
-/* P1 首页 · 需求输入（按 design/pages/P1 实现） */
+﻿/* P1 首页 · 需求输入（按 design/pages/P1 实现） */
 const $ = (id) => document.getElementById(id);
-const state = { days: 3, budget: null, daysTouched: false, budgetTouched: false };
+const state = { days: null, budget: null, daysTouched: false, budgetTouched: false, city: null, startDate: null };
 
 /* ---------- 解析回显：停止输入 600ms 后出现 ----------
    文本里说清楚的天数/预算会回填到控件上（用户手动改过控件则以控件为准）。 */
@@ -42,9 +42,9 @@ function scheduleEcho() {
 
 /* ---------- 天数步进器 ---------- */
 function renderDays() {
-  $("days").textContent = state.days;
-  $("minus").disabled = state.days <= 1;
-  $("plus").disabled = state.days >= 15;
+  $("days").textContent = state.days == null ? "—" : state.days;
+  $("minus").disabled = state.days == null || state.days <= 1;
+  $("plus").disabled = state.days != null && state.days >= 15;
 }
 
 /* ---------- 校验 ---------- */
@@ -58,7 +58,8 @@ function validate() {
     $("text").classList.add("invalid");
     errs.push("多说一句，比如想去哪、玩几天");
   }
-  if (state.days < 1 || state.days > 15) errs.push("天数填 1–15 天");
+  if (state.days == null) errs.push("先说说玩几天，或用「智能识别」自动填");
+  else if (state.days < 1 || state.days > 15) errs.push("天数填 1–15 天");
   if (state.budget !== null && state.budget > 0 && state.budget < 100) {
     $("budget").classList.add("invalid");
     errs.push("预算至少 100 元，或选不限");
@@ -93,8 +94,8 @@ async function submit(force, dayOverride, answers) {
   $("err").textContent = "";
   $("ask").innerHTML = "";
   try {
-    const trip = await API.generate(text, days, budget, city, force,
-                                    state.daysTouched || !!answers);
+    const trip = await API.generate(text, days, budget, city || state.city, force,
+                                    state.daysTouched || !!answers, state.startDate);
     localStorage.setItem("last_trip", trip.trip_id);
     location.href = `/plan.html?trip=${encodeURIComponent(trip.trip_id)}`;
   } catch (e) {
@@ -196,6 +197,65 @@ function showBudgetAsk(info) {
   $("force").onclick = () => submit(true);
 }
 
+/* ---------- 智能识别：一次把城市/日期/天数/预算填好 ---------- */
+async function smartFill() {
+  const text = $("text").value.trim();
+  if (text.length < 2) return toast("先写一句想去哪儿");
+  const btn = $("btn-smart");
+  btn.disabled = true;
+  btn.textContent = "正在读这句话…";
+  try {
+    const r = await API.chat(text, {}, {});
+    const need = (r && r.need) || {};
+    const filled = [];
+
+    if (need.city && need.city !== "__unknown__") {
+      state.city = need.city;
+      paintCities();
+      filled.push(need.city);
+    }
+    if (need.days) {
+      state.days = Math.max(1, Math.min(15, Number(need.days)));
+      renderDays();
+      filled.push(state.days + " 天");
+    }
+    if (typeof need.budget === "number") {
+      state.budget = need.budget;
+      $("budget").value = need.budget;
+      filled.push("预算 ¥" + need.budget);
+    }
+    if (need.start_date) {
+      state.startDate = need.start_date;
+      $("start-date").value = need.start_date;
+      filled.push(need.start_date);
+    }
+    toast(filled.length ? "已填入：" + filled.join(" · ") : "这句话里没读到新信息");
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "智能识别这段描述，自动填下面的信息";
+  }
+}
+
+function paintCities() {
+  $("city-chips").querySelectorAll("[data-city]").forEach((b) => {
+    b.classList.toggle("on", b.dataset.city === state.city);
+  });
+}
+
+async function loadCities() {
+  try {
+    const r = await API.cities();
+    $("city-chips").innerHTML = (r.cities || []).map(
+      (c) => `<button class="chip" data-city="${esc(c)}">${esc(c)}</button>`
+    ).join("");
+    $("city-chips").querySelectorAll("[data-city]").forEach((b) => {
+      b.onclick = () => { state.city = b.dataset.city; paintCities(); };
+    });
+  } catch (e) { /* 城市列表拿不到不影响手填 */ }
+}
+
 /* ---------- 最近行程（最多 3 条） ---------- */
 async function loadRecent() {
   try {
@@ -240,8 +300,14 @@ document.addEventListener("DOMContentLoaded", () => {
     $("no-limit").classList.add("on");
   };
   $("gen").onclick = () => submit(false);
+  $("btn-smart").onclick = smartFill;
+  const today = new Date().toISOString().slice(0, 10);
+  $("start-date").min = today;
+  $("start-date").onchange = () => { state.startDate = $("start-date").value || null; };
+  loadCities();
   document.querySelectorAll("#examples button").forEach((b) => {
     b.onclick = () => { $("text").value = b.dataset.fill; scheduleEcho(); };
   });
   loadRecent();
 });
+

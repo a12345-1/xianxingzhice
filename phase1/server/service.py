@@ -247,7 +247,8 @@ def create_trip(need, raw_text="", budget_limit=None):
 
 
 # ---------------------------------------------------------------- 生成
-def generate(raw_text, day_count, budget_limit, city=None, force=False, days_from_ui=False):
+def generate(raw_text, day_count, budget_limit, city=None, force=False,
+             days_from_ui=False, start_date=None):
     """跑完整条链，返回（规格化响应, 各智能体耗时）。"""
     timings = []
 
@@ -265,6 +266,8 @@ def generate(raw_text, day_count, budget_limit, city=None, force=False, days_fro
         need["city_explicit"] = True
     if budget_limit:
         need["budget"] = budget_limit
+    if start_date:
+        need["start_date"] = start_date
     need["force"] = bool(force)
     timings.append({"name": "需求解析", "status": "ok", "ms": _now_ms(t)})
 

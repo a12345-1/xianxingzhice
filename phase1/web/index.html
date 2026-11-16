@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
@@ -29,12 +29,23 @@
       <h2 style="margin:0 0 10px;font-size:17px">想去哪儿，玩几天？</h2>
       <textarea id="text" placeholder="周末两天放松一下，别太赶"></textarea>
       <div class="echo" id="echo"></div>
+      <button class="btn ghost block" id="btn-smart" style="margin-bottom:12px">智能识别这段描述，自动填下面的信息</button>
+
+      <div class="row">
+        <span class="label">目的地</span>
+        <div class="chips" id="city-chips"></div>
+      </div>
+
+      <div class="row">
+        <span class="label">出发日期</span>
+        <input id="start-date" type="date" style="max-width:220px" />
+      </div>
 
       <div class="row">
         <span class="label">玩几天</span>
         <div class="stepper">
           <button id="minus" aria-label="减少">－</button>
-          <span class="val" id="days">3</span>
+          <span class="val" id="days">—</span>
           <button id="plus" aria-label="增加">＋</button>
         </div>
       </div>
@@ -61,3 +72,4 @@
 <script src="/js/index.js"></script>
 </body>
 </html>
+
