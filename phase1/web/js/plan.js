@@ -134,6 +134,26 @@ function renderItems() {
   box.querySelectorAll("[data-act]").forEach((b) => {
     b.onclick = (ev) => { ev.stopPropagation(); onAct(b.dataset.act, b.dataset.id); };
   });
+  box.querySelectorAll("[data-cost-for]").forEach((inp) => {
+    inp.onclick = (ev) => ev.stopPropagation();
+    const commit = async () => {
+      const id = inp.dataset.costFor;
+      const v = Math.max(0, Math.round(Number(inp.value) || 0));
+      const it = currentDay().items.find((x) => x.item_id === id);
+      if (it && itemBaseCost(it) === v) return;
+      try {
+        DATA = await API.patch(TRIP_ID, id, "update", { cost: v });
+        markDirty();
+        render();
+        toast(`「${(it && it.name) || "这一项"}」改为 ¥${v}`);
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    inp.onchange = commit;
+    inp.onblur = commit;
+    inp.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); inp.blur(); } };
+  });
   const addBtn = box.querySelector("#add-item");
   if (addBtn) addBtn.onclick = openAddPlace;
 }
@@ -257,6 +277,12 @@ function durationText(it) {
   return `${n} 分钟`;
 }
 
+function itemBaseCost(it) {
+  // cost 里已经含了本段交通费，编辑时只让改“这个地方本身的价格”
+  const fare = (it.transport && it.transport.fare) || 0;
+  return Math.max(0, Math.round((it.cost || 0) - fare));
+}
+
 function itemCard(it) {
   const d = currentDay();
   const conflict = (it.warnings || []).some((w) => w.code !== "INFO");
@@ -287,6 +313,14 @@ function itemCard(it) {
         <button data-act="dur-15" data-id="${esc(it.item_id)}">−15 分</button>
         <span>${durationText(it)}</span>
         <button data-act="dur+15" data-id="${esc(it.item_id)}">+15 分</button>
+      </div>` : ""}
+      ${open ? `
+      <div class="cost-edit">
+        <span>单价 ¥</span>
+        <input type="number" min="0" step="10" inputmode="numeric"
+               value="${itemBaseCost(it)}" data-cost-for="${esc(it.item_id)}" />
+        ${(it.transport && it.transport.fare) ? `<span class="muted">交通另计 ¥${it.transport.fare}</span>` : ""}
+        <span class="muted">改完总预算自动重算</span>
       </div>` : ""}
       <div class="hover-ops">
         <button data-act="up" data-id="${esc(it.item_id)}" title="上移">↑</button>
