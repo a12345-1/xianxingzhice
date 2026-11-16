@@ -299,9 +299,17 @@ function durationText(it) {
 }
 
 function itemBaseCost(it) {
-  // cost 里已经含了本段交通费，编辑时只让改“这个地方本身的价格”
+  // 改价改的是“单价”：门票/餐饮按人份，住宿按房间；交通费另算
+  if (it.unit_price != null) return Math.round(it.unit_price);
   const fare = (it.transport && it.transport.fare) || 0;
-  return Math.max(0, Math.round((it.cost || 0) - fare));
+  const qty = it.qty || 1;
+  return Math.max(0, Math.round(((it.cost || 0) - fare) / qty));
+}
+
+function qtyText(it) {
+  const q = it.qty || 1;
+  if (q <= 1) return "";
+  return ` × ${q} ${it.qty_label || "人"}`;
 }
 
 function itemCard(it) {
@@ -321,7 +329,7 @@ function itemCard(it) {
     <div class="time">${esc(it.start_time)}</div>
     <div class="body">
       <div class="name">${esc(it.name)}<span class="type">${TYPE_LABEL[it.type] || it.type}</span></div>
-      <div class="sub">${durationText(it)} · ${yuan(it.cost)}${tr ? " · " + tr : ""}</div>
+      <div class="sub">${durationText(it)} · ¥${itemBaseCost(it)}${qtyText(it)}${tr ? " · " + tr : ""}</div>
       ${tags || src || hours ? `<div class="tags">${tags}${src}${hours}</div>` : ""}
       ${warns && conflict ? `<div class="warnline">⚠ ${warns}</div>` : ""}
       <div class="item-actions">
@@ -343,7 +351,7 @@ function itemCard(it) {
       </div>` : ""}
       ${open ? `
       <div class="cost-edit">
-        <span>单价 ¥</span>
+        <span>单价 ¥${it.qty_label ? "（每" + it.qty_label + "）" : ""}</span>
         <input type="number" min="0" step="10" inputmode="numeric"
                value="${itemBaseCost(it)}" data-cost-for="${esc(it.item_id)}" />
         ${(it.transport && it.transport.fare) ? `<span class="muted">交通另计 ¥${it.transport.fare}</span>` : ""}

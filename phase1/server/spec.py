@@ -65,8 +65,8 @@ FARE_BASE = {"walk": 0.0, "bus": 2.0, "taxi": 13.0}
 FARE_PER_KM = {"walk": 0.0, "bus": 1.0, "taxi": 2.6}
 
 
-def _fare(prev, cur, tr):
-    """一段路的交通费：公交按票价，打车按“起步价 + 里程”。"""
+def _fare(prev, cur, tr, people=1):
+    """一段路的交通费：公交/地铁按人算，打车按车算（4 人一车）。"""
     if not prev:
         return 0
     mode = tr.get("mode", "walk")
@@ -74,7 +74,21 @@ def _fare(prev, cur, tr):
         return 0
     km = _haversine_km((prev.get("lat"), prev.get("lng")), (cur.get("lat"), cur.get("lng"))) or 0
     km = km * 1.35           # 直线距离折算实际路网里程
-    return int(round(FARE_BASE.get(mode, 0) + FARE_PER_KM.get(mode, 0) * km))
+    if mode == "taxi":
+        cars = max(1, math.ceil(people / 4))      # 5 人就要两辆车
+        per_car = FARE_BASE["taxi"] + FARE_PER_KM["taxi"] * km
+        return int(round(per_car * cars))
+    # 公交 / 地铁：每人一张票
+    return int(round((FARE_BASE.get(mode, 0) + FARE_PER_KM.get(mode, 0) * km) * max(people, 1)))
+
+
+def _unit_mult(kind, people):
+    """门票、餐饮按人份；住宿按房间（2 人一间）。"""
+    if kind == "hotel":
+        return max(1, math.ceil(people / 2))
+    if kind in ("attraction", "food"):
+        return max(people, 1)
+    return 1
 
 
 def _breakdown(item, cost):
@@ -145,9 +159,11 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
         weather = _day_weather(start, d, trip.get("city") or "")
         day_items, prev, day_cost = [], None, 0
         for idx, it in enumerate(lst, start=1):
-            cost = int(round(float(it.get("cost") or 0)))
+            unit = int(round(float(it.get("cost") or 0)))      # 单价（一人/一间）
+            mult = _unit_mult(it["type"], people)
+            cost = unit * mult
             tr = _transport(prev, it)
-            fare = _fare(prev, it, tr)          # 这一段路的交通费（估算）
+            fare = _fare(prev, it, tr, people)                 # 这一段路的交通费（人数感知）
             start_min = _hhmm_to_min(it.get("start_time"))
             end_min = start_min + int(it.get("duration_min") or 0)
 
@@ -190,6 +206,9 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
                 "duration_min": int(it.get("duration_min") or 0),
                 "transport": {**tr, "fare": fare},
                 "cost": total_cost,
+                "unit_price": unit,          # 单价（一人/一间）
+                "qty": mult,                 # 份数：人数 / 房间数
+                "qty_label": ("房间" if it["type"] == "hotel" else "人") if mult > 1 else "",
                 "cost_breakdown": bd,
                 "source": "model" if src == "model" else ("user" if src == "user" else "knowledge_base"),
                 "open_hours": it.get("open_hours") or None,
@@ -218,7 +237,13 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
 
     fare_total = sum(int(i["transport"].get("fare") or 0)
                      for d in days for i in d["items"])
-    budget = _budget(items, total, trip.get("budget_limit"), people, fare_total)
+    # 四类金额直接用排好的条目汇总（已按人数/房间数折算），不能用原始单价
+    cats_total = {"ticket": 0, "transport": 0, "food": 0, "hotel": 0}
+    for dd in days:
+        for it_i in dd["items"]:
+            for k, v in (it_i.get("cost_breakdown") or {}).items():
+                cats_total[k] = cats_total.get(k, 0) + int(v or 0)
+    budget = _budget(items, total, trip.get("budget_limit"), people, fare_total, cats_total)
     tips_obj = _tips(trip, days, items, tips)
 
     return {
@@ -258,12 +283,15 @@ def build(trip, need, items, conflicts, tips=None, agents=None, elapsed_ms=None)
     }
 
 
-def _budget(items, total, limit, people, fare_total=0):
-    amounts = {"ticket": 0, "transport": int(fare_total or 0), "food": 0, "hotel": 0}
-    for it in items:
-        cost = int(round(float(it.get("cost") or 0)))
-        key = {"food": "food", "hotel": "hotel", "transport": "transport"}.get(it["type"], "ticket")
-        amounts[key] += cost
+def _budget(items, total, limit, people, fare_total=0, cats=None):
+    if cats:
+        amounts = {k: int(v or 0) for k, v in cats.items()}
+    else:
+        amounts = {"ticket": 0, "transport": int(fare_total or 0), "food": 0, "hotel": 0}
+        for it in items:
+            cost = int(round(float(it.get("cost") or 0)))
+            key = {"food": "food", "hotel": "hotel", "transport": "transport"}.get(it["type"], "ticket")
+            amounts[key] += cost
 
     lim = None
     try:

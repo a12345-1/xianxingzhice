@@ -404,11 +404,19 @@ def _plan_guarded(need: dict, pois: list, days: int):
     except (TypeError, ValueError):
         limit = None
 
+    party = max(1, int(need.get("companions") or need.get("people") or 1))
+    rooms = max(1, (party + 1) // 2)
+
     def total_of(ps):
+        """按人数折算总额：门票/餐饮 × 人数，住宿 × 房间数。"""
         s = 0.0
         for p in ps:
-            for x in p["spots"] + p["foods"] + ([p["hotel"]] if p["hotel"] else []):
-                s += float(x["price"] or 0)
+            for x in p["spots"]:
+                s += float(x["price"] or 0) * party
+            for x in p["foods"]:
+                s += float(x["price"] or 0) * party
+            if p["hotel"]:
+                s += float(p["hotel"]["price"] or 0) * rooms
         return s
 
     if limit:
