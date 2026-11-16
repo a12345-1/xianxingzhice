@@ -395,6 +395,15 @@ LUNCH_MIN = 11 * 60 + 45
 DINNER_MIN = 17 * 60 + 30
 
 
+def _open_min(poi):
+    """取营业时间的第一段开始分钟；解析不到返回 None。"""
+    hours = (poi or {}).get("open_hours") or ""
+    m = re.search(r"(\d{1,2}):(\d{2})\s*[-—~]", hours)
+    if not m:
+        return None
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
 def _retime(tid, day):
     """按当天顺序重算开始时间（换顺序 / 加地点 / 删地点后都要调）。
 
@@ -410,6 +419,10 @@ def _retime(tid, day):
         dur = int(it["duration_min"] or 0)
         if it["type"] == "food":
             t = max(t, LUNCH_MIN if t < 13 * 60 else DINNER_MIN)
+            # 夜市/大排档晚上才开门，别硬塞到午饭
+            o = _open_min(db.poi_by_id(it.get("poi_id")))
+            if o and t < o:
+                t = o
         t = min(t, 23 * 60 + 30)
         db.item_update(it["id"], {"start_time": f"{t // 60:02d}:{t % 60:02d}"})
         t += dur + BUFFER_MIN
@@ -487,16 +500,39 @@ def apply_patch(tid, item_id, action, patch):
         return {"ok": True, "moved": target - 1 != cur}
 
     if action == "insert":
+        # 真插入：在指定位置插一条，不能像老代码那样把当天整段重写
         new = patch.get("item") or {}
-        name = new.get("name") or "新增地点"
-        db.items_replace_day(tid, it["day_index"], [{
-            "type": new.get("type", "attraction"), "name": name,
+        poi = db.poi_by_id(patch.get("poi_id")) if patch.get("poi_id") else None
+        if poi:
+            name = poi["name"]
+        else:
+            name = (new.get("name") or "").strip()
+        if not name:
+            return False
+
+        pos = max(1, int(patch.get("seq") or (it["seq"] + 1)))
+        db.item_add(tid, it["day_index"], {
+            "type": new.get("type") or (poi["type"] if poi else "attraction"),
+            "name": name,
             "start": new.get("start_time", "12:00"),
-            "duration_min": int(new.get("duration_min") or 60),
-            "cost": float(new.get("cost") or 0), "poi_id": None,
-            "area": it.get("area"), "tags": "", "note": "",
-        }])
-        return True
+            "duration_min": int(new.get("duration_min") or (poi["stay_min"] if poi else 60)),
+            "cost": float(new.get("cost") if new.get("cost") is not None
+                          else (poi["price"] if poi else 0)),
+            "poi_id": poi["id"] if poi else None,
+            "area": poi["area"] if poi else (it.get("area") or ""),
+            "tags": poi["tags"] if poi else "",
+            "note": "手动新增",
+            "source": "user",
+        })
+        # 把新条目挪到目标位置并重新编号
+        rows = sorted([x for x in db.items_get(tid) if x["day_index"] == it["day_index"]],
+                      key=lambda y: y["seq"])
+        moved = rows.pop()
+        rows.insert(min(pos - 1, len(rows)), moved)
+        for i, x in enumerate(rows, start=1):
+            db.item_update(x["id"], {"seq": i})
+        _retime(tid, it["day_index"])
+        return {"ok": True, "moved": True, "item_id": f"it_{moved['id']}"}
 
     return False
 

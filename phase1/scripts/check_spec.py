@@ -107,6 +107,19 @@ def main():
           "PATCH 回完整且自洽的 budget")
     check(p2["item"]["duration_min"] == 45, "PATCH 生效")
 
+    # insert：必须在原位置插入一条，不能把当天整段重写（原来的 P0）
+    day1 = trip["days"][0]["items"]
+    anchor = day1[0]["item_id"]
+    before_cnt = len(day1)
+    cands = c.get(f"/api/trips/{trip['trip_id']}/candidates?day=1&type=food").json()["candidates"]
+    r_ins = c.patch(f"/api/trips/{trip['trip_id']}/items/{anchor}",
+                    json={"action": "insert",
+                          "patch": {"poi_id": cands[0]["poi_id"], "seq": 2}})
+    check(r_ins.status_code == 200, "PATCH insert 200")
+    after_day = r_ins.json()["days"][0]["items"]
+    check(len(after_day) == before_cnt + 1, "insert 后当天条目数 +1（不清空）")
+    check(all(x["start_time"] for x in after_day), "insert 后当天时间完整")
+
     # 删除
     r3 = c.patch(f"/api/trips/{trip['trip_id']}/items/{target}",
                  json={"action": "delete", "patch": {}})
