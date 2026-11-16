@@ -256,6 +256,24 @@ async function loadCities() {
   } catch (e) { /* 城市列表拿不到不影响手填 */ }
 }
 
+/* ---------- AI 状态角标：配了 LLM_API_KEY 才亮 ---------- */
+async function loadAiBadge() {
+  const el = $("ai-badge");
+  if (!el) return;
+  try {
+    const h = await API.health();
+    if (h.model) {
+      el.textContent = "AI 已连接 · " + h.model;
+      el.style.color = "#1f7a4d";
+    } else {
+      el.textContent = "规则模式（未配 Key）";
+      el.style.color = "#a35a00";
+    }
+  } catch (e) {
+    el.textContent = "";
+  }
+}
+
 /* ---------- 最近行程（最多 3 条） ---------- */
 async function loadRecent() {
   try {
@@ -305,6 +323,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("start-date").min = today;
   $("start-date").onchange = () => { state.startDate = $("start-date").value || null; };
   loadCities();
+  loadAiBadge();
   document.querySelectorAll("#examples button").forEach((b) => {
     b.onclick = () => { $("text").value = b.dataset.fill; scheduleEcho(); };
   });

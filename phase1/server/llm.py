@@ -15,6 +15,11 @@ def available() -> bool:
     return (not use_mock()) and bool(LLM_API_KEY) and httpx is not None
 
 
+def model_name() -> str:
+    """给健康检查用：当前接的是哪个模型。"""
+    return LLM_MODEL if available() else ""
+
+
 def extract_json(text: str):
     if not isinstance(text, str):
         return None

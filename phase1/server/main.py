@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from . import db, service
 from . import amap
+from . import llm
 from .config import WEB_DIR, use_mock
 
 
@@ -339,4 +340,5 @@ def health():
     with db.conn() as c:
         trips = len(c.execute("SELECT id FROM trips").fetchall())
     return {"ok": True, "mock": use_mock(), "poi": len(db.poi_list()), "trips": trips,
-            "version": "v1-single", "cities": db.cities()}
+            "version": "v1-single", "cities": db.cities(),
+            "model": llm.model_name() if (not use_mock() and llm.available()) else None}
