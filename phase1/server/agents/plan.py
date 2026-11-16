@@ -357,6 +357,46 @@ def _plan_guarded(need: dict, pois: list, days: int):
                 p["spots"].pop(i + 1)
             i += 1
 
+    # 饭点补位：模型经常只给 1 家餐厅，导致没有午饭（或只有夜市当午饭）
+    def _steal_meal(target, at, latest):
+        """本城可用的餐厅用完了，就从别的一天“借”一家——但不能把别人的饭点借空。"""
+        for other in picked:
+            if other is target or len(other["foods"]) <= 1:
+                continue
+            for f in list(other["foods"]):
+                if not _pick_meal([f], at, latest):
+                    continue
+                rest = [x for x in other["foods"] if x is not f]
+                # 借走之后，原那一天还得能吃上饭
+                if not any(_pick_meal([x], at, latest) for x in rest):
+                    continue
+                other["foods"].remove(f)
+                fixes.append("第 %d 天缺饭点，把「%s」从第 %d 天挪过来"
+                             % (target["day"], f["name"], other["day"]))
+                return f
+        return None
+
+    for p in picked:
+        pool = [x for x in cand if x["type"] == "food" and x["id"] not in used]
+        pool = [x for x in pool if x not in p["foods"]]
+        has_lunch = any(_pick_meal([f], LUNCH_AT, 13 * 60 + 30) for f in p["foods"])
+        if not has_lunch:
+            f = _pick_meal(pool, LUNCH_AT, 13 * 60 + 30) or _steal_meal(p, LUNCH_AT, 13 * 60 + 30)
+            if f:
+                p["foods"].insert(0, f)
+                used.add(f["id"])
+                pool = [x for x in pool if x["id"] != f["id"]]
+                fixes.append("第 %d 天没有午饭，补了「%s」" % (p["day"], f["name"]))
+        if not any(_pick_meal([f], LUNCH_AT, 13 * 60 + 30) for f in p["foods"]):
+            fixes.append("第 %d 天附近没有做午市的餐厅，午饭请自行安排" % p["day"])
+        has_dinner = any(_pick_meal([f], DINNER_AT, 19 * 60 + 30) for f in p["foods"])
+        if not has_dinner:
+            f = _pick_meal(pool, DINNER_AT, 19 * 60 + 30) or _steal_meal(p, DINNER_AT, 19 * 60 + 30)
+            if f:
+                p["foods"].append(f)
+                used.add(f["id"])
+                fixes.append("第 %d 天没有晚饭，补了「%s」" % (p["day"], f["name"]))
+
     # 预算：超支先砍最贵的收费景点，再降住宿
     limit = need.get("budget_limit")
     try:
@@ -403,34 +443,16 @@ def _plan_guarded(need: dict, pois: list, days: int):
                 fixes.append("超出预算，住宿从「%s」降为「%s」" % (old["name"], cheaper[0]["name"]))
             guard += 1
 
-    # 生成条目并排时间
+    # 按时间窗排一天：上午景点 -> 午饭 -> 下午景点 -> 晚饭 -> 住宿
     plan = []
     for p in picked:
-        items, t = [], DAY_START
-        for idx, poi in enumerate(p["spots"]):
-            t = max(t, earliest(poi))
-            items.append(_entry(poi, t))
-            t += int(poi["stay_min"] or 60) + BUFFER_MIN
-        if p["foods"]:
-            food = p["foods"][0]
-            lunch = max(t, LUNCH_T if t < 13 * 60 else DINNER_T)
-            items.append(_entry(food, lunch))
-            t = lunch + int(food["stay_min"] or 60)
-        if len(p["foods"]) > 1:
-            food2 = p["foods"][1]
-            dinner = max(t, DINNER_T)
-            if dinner <= 20 * 60:
-                items.append(_entry(food2, dinner))
-                t = dinner + int(food2["stay_min"] or 60)
-        if p["hotel"] and p["day"] < days:
-            items.append({
-                "type": "hotel", "name": p["hotel"]["name"], "start": _fmt(max(t, HOTEL_T)),
-                "duration_min": 0, "cost": p["hotel"]["price"], "poi_id": p["hotel"]["id"],
-                "area": p["hotel"]["area"], "tags": p["hotel"]["tags"], "note": "住宿",
-            })
+        items = _schedule_day(p["spots"], p["foods"], p["hotel"], p["day"], days)
         plan.append({"day": p["day"],
                      "theme": (p["spots"][0]["area"] if p["spots"] else "市区"),
                      "items": items})
+
+    plan, extra = _fix_food_clash(plan)
+    fixes.extend(extra)
 
     # 用最终条目重算一次总额，超了要如实说
     if limit:
@@ -440,3 +462,110 @@ def _plan_guarded(need: dict, pois: list, days: int):
                          % (int(real), limit, int(real)))
 
     return plan, {"source": "llm+guard", "note": note, "fixes": fixes}
+
+
+# ---- 一天的固定时间窗 ----
+LUNCH_AT = 11 * 60 + 45      # 午饭
+DINNER_AT = 18 * 60          # 晚饭
+AFTERNOON_AT = 13 * 60 + 15  # 午饭后第一站
+
+
+def _pick_meal(foods, at, latest):
+    """挑一个在目标时段确实营业的餐厅；都不营业就返回 None。"""
+    ok = []
+    for f in foods:
+        e = earliest(f)
+        if e <= latest and (open_at(f, at) or e <= at):
+            ok.append(f)
+    if not ok:
+        return None
+    ok.sort(key=lambda f: abs(earliest(f) - at))
+    return ok[0]
+
+
+def _schedule_day(spots, foods, hotel, day_index, days):
+    """按时间窗排一天：上午景点 → 午饭 → 下午景点 → 晚饭 → 住宿。"""
+    items, t = [], DAY_START
+    rest = list(spots)
+    pool = list(foods)
+    lunch = _pick_meal(pool, LUNCH_AT, 13 * 60 + 30)
+    if lunch:
+        pool.remove(lunch)
+    dinner = _pick_meal(pool, DINNER_AT, 19 * 60 + 30)
+    if dinner:
+        pool.remove(dinner)
+
+    def place(poi):
+        nonlocal t
+        t = min(max(t, earliest(poi)), 21 * 60 + 30)
+        items.append(_entry(poi, t))
+        t += int(poi["stay_min"] or 60) + BUFFER_MIN
+
+    # 上午：最多逛到 11:15
+    while rest and t < 11 * 60 + 15:
+        place(rest.pop(0))
+
+    # 午饭
+    if lunch:
+        t = max(t, LUNCH_AT, earliest(lunch))
+        t = min(t, 13 * 60 + 30)
+        items.append(_entry(lunch, t))
+        t = t + int(lunch["stay_min"] or 60) + BUFFER_MIN
+
+    # 下午：最多逛到 17:15
+    while rest and t < 17 * 60 + 15:
+        place(rest.pop(0))
+
+    # 晚饭
+    if dinner:
+        t = max(t, DINNER_AT, earliest(dinner))
+        t = min(t, 19 * 60 + 30)
+        items.append(_entry(dinner, t))
+        t = t + int(dinner["stay_min"] or 60) + BUFFER_MIN
+
+    # 住宿
+    if hotel and day_index < days:
+        items.append({
+            "type": "hotel", "name": hotel["name"], "start": _fmt(max(t, HOTEL_T)),
+            "duration_min": 0, "cost": hotel["price"], "poi_id": hotel["id"],
+            "area": hotel["area"], "tags": hotel["tags"], "note": "住宿",
+        })
+    return items
+
+
+def _to_min(hhmm):
+    try:
+        h, m = str(hhmm).split(":")
+        return int(h) * 60 + int(m)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _fix_food_clash(plan):
+    """同一天里两顿餐饮挨着，就把后一顿推到晚饭时段；推不动就顺延后面的条目。"""
+    fixes = []
+    for day in plan:
+        items = day["items"]
+        i = 1
+        while i < len(items):
+            prev, cur = items[i - 1], items[i]
+            if prev["type"] == "food" and cur["type"] == "food":
+                prev_end = (_to_min(prev["start"]) or 0) + int(prev["duration_min"] or 0)
+                want = max(DINNER_T, prev_end + 120)
+                if want <= 21 * 60:
+                    delta = want - (_to_min(cur["start"]) or 0)
+                    if delta > 0:
+                        for j in range(i, len(items)):
+                            jt = _to_min(items[j]["start"])
+                            if jt is not None:
+                                items[j]["start"] = _fmt(min(jt + delta, 23 * 60))
+                        fixes.append("第 %d 天两顿饭排在一起，把「%s」挪到 %s"
+                                     % (day["day"], cur["name"], cur["start"]))
+                else:
+                    fixes.append("第 %d 天两顿饭排在一起且没空位，去掉了「%s」"
+                                 % (day["day"], cur["name"]))
+                    items.pop(i)
+                    continue
+            i += 1
+    return plan, fixes
+
